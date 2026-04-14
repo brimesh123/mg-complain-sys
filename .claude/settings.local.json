@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(curl -s http://localhost:3000/api/complaints)",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\('API OK, total complaints:',j.total\\);\")",
+      "Bash(node --experimental-sqlite -e ':*)"
+    ]
+  }
+}

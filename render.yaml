@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mogal-complain-sys
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node --experimental-sqlite server.js
+    envVars:
+      - key: NODE_VERSION
+        value: 22.21.1
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: mogal-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -1,0 +1,20 @@
+{
+  "name": "mogal-complain-sys",
+  "version": "1.0.0",
+  "description": "Customer Complaint Management System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --experimental-sqlite server.js",
+    "dev": "nodemon --exec \"node --experimental-sqlite\" server.js",
+    "import": "node --experimental-sqlite scripts/import-excel.js"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.26.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

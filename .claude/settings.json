@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)",
+      "Bash(npm install:*)",
+      "Bash(node --experimental-sqlite scripts/import-excel.js)",
+      "Bash(node --experimental-sqlite server.js)",
+      "Bash(curl -s http://localhost:3000/api/dashboard/stats)",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\('Stats:',JSON.stringify\\(j.data.stats,null,2\\)\\);console.log\\('Recent complaints:',j.data.recent.length\\);\")",
+      "Bash(curl -s \"http://localhost:3000/api/customers/lookup?q=1001\")",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\(JSON.stringify\\(j.data[0],null,2\\)\\);\")",
+      "Bash(curl -s \"http://localhost:3000/api/customers/lookup?q=aksha\")",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\('Name search count:',j.data.length\\);\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/complaints -H \"Content-Type: application/json\" -d \"{\\\\\"customer_id\\\\\":1,\\\\\"complaint_type\\\\\":\\\\\"No Signal\\\\\",\\\\\"priority\\\\\":\\\\\"High\\\\\",\\\\\"remarks\\\\\":\\\\\"Test complaint\\\\\"}\")",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\('Created:',j.data.complaint_no,'Status:',j.data.status,'Customer:',j.data.new_party_name\\);\")",
+      "Bash(curl -s http://localhost:3000/api/areas)",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\('Areas:',j.data.join\\(', '\\)\\);\")",
+      "Bash(curl -s http://localhost:3000/api/complaint-types)",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\(0,'utf8'\\);const j=JSON.parse\\(d\\);console.log\\('Types:',j.data.map\\(t=>t.name\\).join\\(', '\\)\\);\")",
+      "Bash(pkill -f \"node --experimental-sqlite server.js\")"
+    ]
+  }
+}
