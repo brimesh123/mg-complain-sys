@@ -1475,16 +1475,22 @@ function renderWaPage(el) {
   // Always poll when on this page so any status change auto-updates
   if (!['ready','off'].includes(s)) startWaStatusPolling(el);
   else if (s === 'off') {
-    // Still poll slowly in case connect fires in background
+    // Poll every 2s — handle both direct 'ready' jump and intermediate states
     if (_waPollTimer) clearInterval(_waPollTimer);
     _waPollTimer = setInterval(async () => {
       await waPoll();
-      if (!['off','ready'].includes(WA.status) && S.page === 'whatsapp') {
-        clearInterval(_waPollTimer); _waPollTimer = null;
+      if (WA.status === 'off') return; // still off, keep waiting
+      clearInterval(_waPollTimer); _waPollTimer = null;
+      if (S.page !== 'whatsapp') return;
+      if (WA.status === 'ready') {
+        // jumped straight to ready (session restored)
+        S.page = null; navigate('whatsapp');
+      } else {
+        // in-progress state (init/qr/authenticated) — start fast poll
         startWaStatusPolling(el);
         S.page = null; navigate('whatsapp');
       }
-    }, 3000);
+    }, 2000);
   }
 }
 
@@ -2049,6 +2055,14 @@ window.openCustomerForm = openCustomerForm;
   await preload();
   await Promise.all([waPoll(), syncPoll()]);
   navigate('dashboard');
-  setInterval(waPoll,   15000);
+  // Global WA poll — every 5s, auto-refresh WhatsApp page if status changes
+  let _globalWaStatus = WA.status;
+  setInterval(async () => {
+    await waPoll();
+    if (WA.status !== _globalWaStatus) {
+      _globalWaStatus = WA.status;
+      if (S.page === 'whatsapp') { S.page = null; navigate('whatsapp'); }
+    }
+  }, 5000);
   setInterval(syncPoll, 30000);
 })();

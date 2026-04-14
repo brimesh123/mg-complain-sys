@@ -153,14 +153,30 @@ class WhatsAppService extends EventEmitter {
     // Read directly from WhatsApp Web's in-memory store — much faster than getChats()
     const groups = await this._client.pupPage.evaluate(async () => {
       try {
-        // Try multiple store access patterns across WA Web versions
+        // Wait up to 8s for the store to populate after fresh connect
+        for (let i = 0; i < 16; i++) {
+          const hasStore = window.Store?.Chat?.getModelsArray ||
+                           window.Store?.Chat?.models ||
+                           window.WWebJS?.getChats;
+          if (hasStore) break;
+          await new Promise(r => setTimeout(r, 500));
+        }
         let models = [];
         if (window.Store?.Chat?.getModelsArray) {
           models = await window.Store.Chat.getModelsArray();
         } else if (window.Store?.Chat?.models) {
-          models = window.Store.Chat.models;
+          models = Object.values(window.Store.Chat.models);
         } else if (window.WWebJS?.getChats) {
           models = await window.WWebJS.getChats();
+        }
+        // If store found but chats not yet loaded, wait a bit more
+        if (!models.length) {
+          await new Promise(r => setTimeout(r, 3000));
+          if (window.Store?.Chat?.getModelsArray) {
+            models = await window.Store.Chat.getModelsArray();
+          } else if (window.Store?.Chat?.models) {
+            models = Object.values(window.Store.Chat.models);
+          }
         }
         return models
           .filter(c => c.isGroup)
@@ -176,12 +192,12 @@ class WhatsAppService extends EventEmitter {
         return [];
       }
     });
-    // If store returned nothing, fall back to getChats() with a 20s timeout
+    // If store returned nothing, fall back to getChats() with a 60s timeout
     if (!groups.length) {
       console.log('[WA] Store returned 0 groups, falling back to getChats()…');
       const chats = await Promise.race([
         this._client.getChats(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('getChats timed out')), 20000)),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('getChats timed out after 60s')), 60000)),
       ]);
       const fallback = chats
         .filter(c => c.isGroup)
