@@ -12,7 +12,7 @@ const S = {
   selectedCustomer: null,
 };
 
-const WA   = { status: 'off', target_id: null, target_name: null, account: null, hasQr: false };
+const WA   = { status: 'off', target_id: null, target_name: null, account: null, hasQr: false, lastError: null };
 const SYNC = { lastExport: null, xlsxExists: false };
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -190,13 +190,13 @@ async function waPoll() {
 // ─── Router ───────────────────────────────────────────────────────────────────
 const PAGES = {
   dashboard, customers, newComplaint, complaints,
-  engineers, whatsapp: whatsappPage, logs: activityLogs,
+  engineers, whatsapp: whatsappPage, logs: activityLogs, reports: reportsPage,
 };
 const TITLES = {
   dashboard: 'Dashboard', customers: 'Customers',
   'new-complaint': 'New Complaint', complaints: 'Complaints',
   engineers: 'Engineers', whatsapp: 'WhatsApp Integration',
-  logs: 'Activity Log',
+  logs: 'Activity Log', reports: 'Reports',
 };
 
 function navigate(page) {
@@ -210,13 +210,34 @@ function navigate(page) {
   if (fn) fn(content); else content.innerHTML = '<p>Page not found.</p>';
 }
 
-document.querySelectorAll('.nav-item').forEach(el =>
-  el.addEventListener('click', e => { e.preventDefault(); navigate(el.dataset.page); }));
+const sidebar   = document.getElementById('sidebar');
+const mainWrap  = document.getElementById('mainWrapper');
+const sbBackdrop = document.getElementById('sidebarBackdrop');
 
-const sidebar  = document.getElementById('sidebar');
-const mainWrap = document.getElementById('mainWrapper');
-document.getElementById('sidebarToggle').onclick    = () => { sidebar.classList.add('collapsed');    mainWrap.classList.add('expanded'); };
-document.getElementById('sidebarOpenBtn').onclick   = () => { sidebar.classList.remove('collapsed'); mainWrap.classList.remove('expanded'); };
+const closeSidebar = () => {
+  sidebar.classList.remove('open');
+  sidebar.classList.add('collapsed');
+  mainWrap.classList.add('expanded');
+  sbBackdrop.classList.remove('visible');
+};
+const openSidebar = () => {
+  sidebar.classList.add('open');
+  sidebar.classList.remove('collapsed');
+  mainWrap.classList.remove('expanded');
+  sbBackdrop.classList.add('visible');
+};
+
+document.getElementById('sidebarToggle').onclick  = closeSidebar;
+document.getElementById('sidebarOpenBtn').onclick = openSidebar;
+sbBackdrop.addEventListener('click', closeSidebar);
+
+// Nav item click — navigate + auto-close on mobile
+document.querySelectorAll('.nav-item').forEach(el =>
+  el.addEventListener('click', e => {
+    e.preventDefault();
+    navigate(el.dataset.page);
+    if (window.innerWidth <= 768) closeSidebar();
+  }));
 
 // ─── Preload ──────────────────────────────────────────────────────────────────
 async function preload() {
@@ -267,7 +288,6 @@ async function dashboard(el) {
           ['inactive_customers','Inactive (OFF)',     'wifi-off',       '#dc2626','#fee2e2'],
           ['open_complaints',   'Open Complaints',    'alert-circle',   '#d97706','#fef3c7'],
           ['total_complaints',  'Total Complaints',   'clipboard-list', '#0369a1','#e0f2fe'],
-          ['today_complaints',  "Today's Complaints", 'calendar-check', '#7c3aed','#ede9fe'],
         ].map(([k, label, icon, color, bg]) => `
           <div class="stat-card">
             <div class="stat-icon" style="background:${bg};color:${color}">
@@ -536,10 +556,13 @@ function showComplaintSuccess(c) {
 
   const sendBtn    = document.getElementById('sendWaBtn');
   const targetInfo = document.getElementById('waTargetInfo');
+  let _waSent = false; // prevent double-click double-send
   if (WA.status === 'ready' && WA.target_id) {
     sendBtn.style.display = '';
-    targetInfo.textContent = `Target: ${WA.target_name || WA.target_id}`;
+    targetInfo.textContent = `→ ${WA.target_name || 'group'}`;
     sendBtn.onclick = async () => {
+      if (_waSent) return;
+      _waSent = true;
       sendBtn.disabled = true;
       sendBtn.innerHTML = '<i data-lucide="loader"></i> Sending…';
       lucide.createIcons({ nodes: [sendBtn] });
@@ -547,8 +570,9 @@ function showComplaintSuccess(c) {
         await API.post('/api/whatsapp/send', { chat_id: WA.target_id, message: msg });
         sendBtn.innerHTML = '<i data-lucide="check-circle"></i> Sent!';
         lucide.createIcons({ nodes: [sendBtn] });
-        toast('Message sent to WhatsApp group!', 'success');
+        toast('Sent to WhatsApp group!', 'success');
       } catch(err) {
+        _waSent = false;
         toast(err.message, 'danger');
         sendBtn.disabled = false;
         sendBtn.innerHTML = '<i data-lucide="send"></i> Send to WhatsApp Group';
@@ -558,8 +582,8 @@ function showComplaintSuccess(c) {
   } else {
     sendBtn.style.display = 'none';
     targetInfo.innerHTML = WA.status !== 'ready'
-      ? `<a href="#" onclick="navigate('whatsapp')" style="color:var(--primary)">Connect WhatsApp</a> to enable direct sending`
-      : `<a href="#" onclick="navigate('whatsapp')" style="color:var(--primary)">Set a target group</a> to enable direct sending`;
+      ? `<a href="#" onclick="navigate('whatsapp')" style="color:var(--primary)">Connect WhatsApp</a> to enable`
+      : `<a href="#" onclick="navigate('whatsapp')" style="color:var(--primary)">Set a group</a> to enable`;
   }
 }
 
@@ -926,15 +950,17 @@ async function complaints(el) {
     const ps = document.getElementById('cmpPeriodStats');
     if (!ps) return;
     ps.innerHTML = [
-      ['today',      "Today",      'calendar-check',  '#7c3aed','#ede9fe'],
-      ['yesterday',  "Yesterday",  'calendar-minus',  '#0369a1','#e0f2fe'],
-      ['this_month', "This Month", 'calendar',        '#059669','#d1fae5'],
-      ['this_year',  "This Year",  'calendar-range',  '#d97706','#fef3c7'],
+      ['today',      "Today",       'calendar-check',  '#7c3aed','#ede9fe'],
+      ['yesterday',  "Yesterday",   'calendar-minus',  '#0369a1','#e0f2fe'],
+      ['this_month', "This Month",  'calendar',        '#059669','#d1fae5'],
+      ['total',      "Total",       'layers',          '#d97706','#fef3c7'],
     ].map(([k, label, icon, color, bg]) => `
       <div class="period-stat-card">
         <div class="ps-icon" style="background:${bg};color:${color}"><i data-lucide="${icon}"></i></div>
-        <div class="ps-value" data-counter="${s[k] ?? 0}">0</div>
-        <div class="ps-label">${label}</div>
+        <div class="ps-body">
+          <div class="ps-value" data-counter="${s[k] ?? 0}">0</div>
+          <div class="ps-label">${label}</div>
+        </div>
       </div>`).join('');
     lucide.createIcons({ nodes: [ps] });
     ps.querySelectorAll('[data-counter]').forEach(el => animateCounter(el, parseInt(el.dataset.counter)));
@@ -1234,8 +1260,11 @@ function renderWaPage(el) {
     <div class="page-header">
       <div>
         <div class="page-header-title">WhatsApp Integration</div>
-        <div class="page-header-sub">Connect your WhatsApp to send complaints directly to your engineer group</div>
+        <div class="page-header-sub">Connect your WhatsApp to auto-send complaints to your engineer group</div>
       </div>
+      <button class="btn btn-secondary" id="waRefreshBtn">
+        <i data-lucide="refresh-cw"></i> Refresh Status
+      </button>
     </div>
     <div style="max-width:680px;display:flex;flex-direction:column;gap:20px">
 
@@ -1255,13 +1284,16 @@ function renderWaPage(el) {
         </div>
         <div class="card-body">
           <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">
-            Choose which group receives the message when you click <b>Send to WhatsApp Group</b>.
+            Select which group receives the complaint message automatically.
           </p>
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
             <div class="form-group" style="flex:1;min-width:200px">
-              <label class="form-label">Select Group / Contact</label>
-              <select class="form-control" id="waTargetSelect"><option value="">Loading…</option></select>
+              <label class="form-label">Select Group</label>
+              <select class="form-control" id="waTargetSelect"><option value="">Loading groups…</option></select>
             </div>
+            <button class="btn btn-secondary" id="waRetryGroups" style="flex-shrink:0;display:none">
+              <i data-lucide="refresh-cw"></i> Retry
+            </button>
             <button class="btn btn-primary" id="waSetTargetBtn" style="flex-shrink:0">
               <i data-lucide="save"></i> Set Default
             </button>
@@ -1269,7 +1301,7 @@ function renderWaPage(el) {
           ${WA.target_name?`
           <div class="info-banner" style="margin-top:12px">
             <i data-lucide="check-circle-2"></i>
-            Current target: <b>${esc(WA.target_name)}</b>
+            Messages will be sent to: <b>${esc(WA.target_name)}</b>
           </div>`:''}
         </div>
       </div>` : ''}
@@ -1278,10 +1310,12 @@ function renderWaPage(el) {
         <div class="card-header"><span class="card-title">How It Works</span></div>
         <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
           ${[
-            ['message-circle', 'Click Connect and scan the QR code with your WhatsApp (same as WhatsApp Web).'],
-            ['users',          'Once connected, select your engineer group as the notification target.'],
-            ['send',           'When you log a complaint, click "Send to WhatsApp Group" — message goes directly.'],
-            ['shield',         'Your session is saved on this computer. You only need to scan the QR code once.'],
+            ['message-circle', 'Click <b>Connect WhatsApp</b> — a QR code will appear on screen.'],
+            ['smartphone',     'Open WhatsApp on your phone → tap <b>⋮ Menu → Linked Devices → Link a Device</b> → scan the QR.'],
+            ['check-circle-2', 'After scanning, wait 10–15 seconds then click <b>Refresh Status</b> at the top right if the page does not update automatically.'],
+            ['users',          'Once Connected, select your engineer group from the dropdown and click <b>Set Default</b>.'],
+            ['send',           'From now on, every new complaint will <b>automatically</b> send a message to that group.'],
+            ['shield',         'Session is saved — you only scan QR once. If disconnected, just click Connect again.'],
           ].map(([, text], i) => `
             <div style="display:flex;gap:12px;align-items:flex-start">
               <div class="step-num">${i+1}</div>
@@ -1292,13 +1326,23 @@ function renderWaPage(el) {
     </div>`;
   lucide.createIcons({ nodes: [el] });
 
+  // Refresh Status button — re-polls then re-renders
+  document.getElementById('waRefreshBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('waRefreshBtn');
+    btn.disabled = true;
+    await waPoll();
+    S.page = null;
+    navigate('whatsapp');
+  });
+
   document.getElementById('waConnectBtn')?.addEventListener('click', async () => {
     const btn = document.getElementById('waConnectBtn');
     btn.disabled = true; btn.textContent = 'Starting…';
     try {
       await API.post('/api/whatsapp/connect');
-      toast('WhatsApp is starting. Scan the QR code when it appears.', 'info');
       startWaStatusPolling(el);
+      // Re-render to show spinner immediately
+      S.page = null; navigate('whatsapp');
     } catch(e) {
       toast(e.message, 'danger');
       btn.disabled = false; btn.textContent = 'Connect WhatsApp';
@@ -1311,14 +1355,28 @@ function renderWaPage(el) {
       await API.post('/api/whatsapp/disconnect');
       Object.assign(WA, { status:'off', target_id:null, target_name:null });
       toast('WhatsApp disconnected', 'info');
-      navigate('whatsapp');
+      S.page = null; navigate('whatsapp');
     } catch(e) { toast(e.message, 'danger'); }
   });
   if (s === 'ready') {
     loadWaTargets();
     document.getElementById('waSetTargetBtn').onclick = saveWaTarget;
+    document.getElementById('waRetryGroups').onclick = () => loadWaTargets();
   }
-  if (['init','qr','authenticated'].includes(s)) startWaStatusPolling(el);
+  // Always poll when on this page so any status change auto-updates
+  if (!['ready','off'].includes(s)) startWaStatusPolling(el);
+  else if (s === 'off') {
+    // Still poll slowly in case connect fires in background
+    if (_waPollTimer) clearInterval(_waPollTimer);
+    _waPollTimer = setInterval(async () => {
+      await waPoll();
+      if (!['off','ready'].includes(WA.status) && S.page === 'whatsapp') {
+        clearInterval(_waPollTimer); _waPollTimer = null;
+        startWaStatusPolling(el);
+        S.page = null; navigate('whatsapp');
+      }
+    }, 3000);
+  }
 }
 
 function renderWaConnBody(s) {
@@ -1352,14 +1410,20 @@ function renderWaConnBody(s) {
         ${s === 'init' ? 'Starting WhatsApp Web, please wait…' : 'Authenticating…'}
       </span>
     </div>`;
+  const errMsg = WA.lastError || null;
   return `
     <div>
+      ${s === 'error' && errMsg ? `
+        <div style="background:var(--danger-bg);border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12.5px;color:var(--danger)">
+          <b>Error:</b> ${esc(errMsg)}
+        </div>` : ''}
       <p style="font-size:13.5px;color:var(--text-secondary);margin-bottom:14px">
         Connect your WhatsApp to send complaint notifications directly to your engineer group.
-        ${['auth_fail','disconnected'].includes(s)?'<br><span style="color:var(--danger);font-size:12.5px">Previous session ended. Please connect again.</span>':''}
+        ${['auth_fail','disconnected'].includes(s) ? '<br><span style="color:var(--danger);font-size:12.5px">Previous session ended. Please connect again.</span>' : ''}
+        ${s === 'error' && !errMsg ? '<br><span style="color:var(--danger);font-size:12.5px">Failed to start. Please try again.</span>' : ''}
       </p>
       <button class="btn btn-primary" id="waConnectBtn">
-        <i data-lucide="message-circle"></i> Connect WhatsApp
+        <i data-lucide="message-circle"></i> ${s === 'error' ? 'Retry Connect' : 'Connect WhatsApp'}
       </button>
     </div>`;
 }
@@ -1379,31 +1443,41 @@ function startWaStatusPolling(_el) {
     }
     if (['ready','off','auth_fail','error'].includes(WA.status)) {
       clearInterval(_waPollTimer); _waPollTimer = null;
-      if (S.page === 'whatsapp') navigate('whatsapp');
+      if (S.page === 'whatsapp') {
+        // Force full re-render so connected UI + group list loads fresh
+        S.page = null;
+        navigate('whatsapp');
+      }
     }
   }, 2500);
 }
 
 async function loadWaTargets() {
   const sel = document.getElementById('waTargetSelect');
+  const retryBtn = document.getElementById('waRetryGroups');
   if (!sel) return;
+  sel.innerHTML = `<option value="">Loading groups…</option>`;
+  sel.disabled = true;
+  if (retryBtn) retryBtn.style.display = 'none';
   try {
-    const [gRes, cRes] = await Promise.allSettled([
-      API.get('/api/whatsapp/groups'),
-      API.get('/api/whatsapp/contacts'),
-    ]);
-    const groups   = gRes.status === 'fulfilled' ? gRes.value.data : [];
-    const contacts = cRes.status === 'fulfilled' ? cRes.value.data : [];
+    const { data: groups } = await API.get('/api/whatsapp/groups');
+    sel.disabled = false;
+    if (!groups.length) {
+      sel.innerHTML = `<option value="">No groups found — make sure this number is in a group</option>`;
+      if (retryBtn) retryBtn.style.display = '';
+      return;
+    }
     sel.innerHTML = `
-      <option value="">— Choose a target —</option>
-      ${groups.length ? `<optgroup label="Groups">${groups.map(g =>
+      <option value="">— Choose a group —</option>
+      ${groups.map(g =>
         `<option value="${esc(g.id)}" ${WA.target_id===g.id?'selected':''}>${esc(g.name)} (${g.members} members)</option>`
-      ).join('')}</optgroup>` : ''}
-      ${contacts.length ? `<optgroup label="Contacts">${contacts.slice(0,50).map(c =>
-        `<option value="${esc(c.id)}" ${WA.target_id===c.id?'selected':''}>${esc(c.name)}</option>`
-      ).join('')}</optgroup>` : ''}`;
+      ).join('')}`;
   } catch(e) {
-    sel.innerHTML = `<option value="">Failed: ${esc(e.message)}</option>`;
+    sel.disabled = false;
+    sel.innerHTML = `<option value="">Failed — click Retry</option>`;
+    if (retryBtn) retryBtn.style.display = '';
+    console.error('[WA groups error]', e.message);
+    toast(`Groups: ${e.message}`, 'warning');
   }
 }
 
@@ -1533,6 +1607,290 @@ function renderLogs(wrap, logs) {
   lucide.createIcons({ nodes: [wrap] });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// REPORTS PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+let _rptCustomer = null; // selected customer object
+
+async function reportsPage(el) {
+  _rptCustomer = null;
+  el.innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-header-title">Reports</div>
+        <div class="page-header-sub">Customer complaint history &amp; date-wise reports</div>
+      </div>
+      <a class="btn btn-secondary" id="rptExportBtn" href="#" style="pointer-events:none;opacity:.4">
+        <i data-lucide="download"></i> Export XLSX
+      </a>
+    </div>
+
+    <div class="card rpt-filter-card">
+      <div class="card-body">
+        <div class="rpt-filter-grid">
+
+          <!-- Customer autocomplete -->
+          <div class="form-group rpt-customer-wrap" style="margin:0;position:relative">
+            <label class="form-label">Customer <span style="font-size:11px;color:var(--text-muted)">(type name or NSN)</span></label>
+            <div class="rpt-ac-box">
+              <i data-lucide="search" class="rpt-ac-icon"></i>
+              <input class="form-control rpt-ac-input" id="rptCustInput"
+                placeholder="Search customer name or serial no…"
+                autocomplete="off" />
+              <button class="rpt-ac-clear" id="rptCustClear" style="display:none" title="Clear">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+            <div class="rpt-ac-dropdown" id="rptCustDropdown"></div>
+            <div id="rptCustChip" style="display:none;margin-top:8px"></div>
+          </div>
+
+          <!-- Status -->
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Status</label>
+            <select class="form-control" id="rptStatus">
+              <option value="">All Status</option>
+              ${['Open','In Progress','Resolved','Closed'].map(s=>`<option value="${s}">${s}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Quick range -->
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Quick Range</label>
+            <select class="form-control" id="rptRange">
+              <option value="">All Time</option>
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="custom">Custom Range</option>
+            </select>
+          </div>
+
+          <!-- Custom dates (shown only when custom selected) -->
+          <div class="form-group rpt-custom-date" id="rptFromWrap" style="margin:0;display:none">
+            <label class="form-label">From Date</label>
+            <input class="form-control" id="rptFrom" type="date" />
+          </div>
+          <div class="form-group rpt-custom-date" id="rptToWrap" style="margin:0;display:none">
+            <label class="form-label">To Date</label>
+            <input class="form-control" id="rptTo" type="date" />
+          </div>
+
+          <!-- Generate button -->
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn btn-primary rpt-gen-btn" id="rptSearchBtn">
+              <i data-lucide="bar-chart-2"></i> Generate Report
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="rptResults" style="margin-top:20px"></div>`;
+
+  lucide.createIcons({ nodes: [el] });
+
+  // ── Date range toggle ────────────────────────────────────────────────────────
+  const rangeSelect = document.getElementById('rptRange');
+  rangeSelect.addEventListener('change', () => {
+    const show = rangeSelect.value === 'custom';
+    document.getElementById('rptFromWrap').style.display = show ? '' : 'none';
+    document.getElementById('rptToWrap').style.display   = show ? '' : 'none';
+  });
+
+  const getDateRange = () => {
+    const today = new Date();
+    const fmt = d => d.toISOString().slice(0,10);
+    switch (rangeSelect.value) {
+      case 'today':     return { from: fmt(today), to: fmt(today) };
+      case 'yesterday': { const y = new Date(today); y.setDate(y.getDate()-1); return { from: fmt(y), to: fmt(y) }; }
+      case 'week':      { const w = new Date(today); w.setDate(w.getDate()-6); return { from: fmt(w), to: fmt(today) }; }
+      case 'month':     return { from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmt(today) };
+      case 'custom':    return { from: document.getElementById('rptFrom').value, to: document.getElementById('rptTo').value };
+      default:          return { from: '', to: '' };
+    }
+  };
+
+  // ── Customer autocomplete ────────────────────────────────────────────────────
+  const custInput    = document.getElementById('rptCustInput');
+  const custDropdown = document.getElementById('rptCustDropdown');
+  const custClear    = document.getElementById('rptCustClear');
+  const custChip     = document.getElementById('rptCustChip');
+
+  const selectCustomer = (c) => {
+    _rptCustomer = c;
+    custInput.value = `${c.new_party_name} — NSN ${c.nsn}`;
+    custDropdown.innerHTML = '';
+    custDropdown.style.display = 'none';
+    custClear.style.display = '';
+    custChip.style.display = '';
+    custChip.innerHTML = `
+      <div class="rpt-cust-chip">
+        <i data-lucide="user-check"></i>
+        <span><b>${esc(c.new_party_name)}</b> &nbsp;·&nbsp; NSN: ${c.nsn} &nbsp;·&nbsp; ${esc(c.area||'—')}</span>
+      </div>`;
+    lucide.createIcons({ nodes: [custChip] });
+  };
+
+  const clearCustomer = () => {
+    _rptCustomer = null;
+    custInput.value = '';
+    custClear.style.display = 'none';
+    custChip.style.display = 'none';
+    custChip.innerHTML = '';
+    custDropdown.style.display = 'none';
+  };
+
+  custClear.addEventListener('click', () => { clearCustomer(); custInput.focus(); });
+
+  const searchCustomers = debounce(async (q) => {
+    if (!q || q.length < 1) { custDropdown.style.display = 'none'; return; }
+    try {
+      const { data } = await API.get(`/api/customers?search=${encodeURIComponent(q)}&limit=8`);
+      if (!data.length) {
+        custDropdown.innerHTML = `<div class="rpt-ac-empty">No customers found</div>`;
+      } else {
+        custDropdown.innerHTML = data.map(c => `
+          <div class="rpt-ac-item" data-id="${c.id}">
+            <div class="rpt-ac-name">${esc(c.new_party_name)}</div>
+            <div class="rpt-ac-meta">NSN: ${c.nsn} &nbsp;·&nbsp; ${esc(c.area||'—')} &nbsp;·&nbsp; ${esc(c.contact_no||'')}</div>
+          </div>`).join('');
+        custDropdown.querySelectorAll('.rpt-ac-item').forEach((item, i) => {
+          item.addEventListener('click', () => selectCustomer(data[i]));
+        });
+      }
+      custDropdown.style.display = 'block';
+    } catch(_) {}
+  }, 250);
+
+  custInput.addEventListener('input', e => {
+    if (_rptCustomer) clearCustomer();
+    searchCustomers(e.target.value.trim());
+  });
+  custInput.addEventListener('blur', () => {
+    setTimeout(() => { custDropdown.style.display = 'none'; }, 200);
+  });
+  custInput.addEventListener('focus', e => {
+    if (e.target.value && !_rptCustomer) searchCustomers(e.target.value);
+  });
+
+  // ── Generate ─────────────────────────────────────────────────────────────────
+  const load = async () => {
+    const wrap = document.getElementById('rptResults');
+    wrap.innerHTML = `<div class="page-loading"><div class="spinner"></div></div>`;
+    const { from, to } = getDateRange();
+    const p = new URLSearchParams({
+      nsn:       _rptCustomer ? _rptCustomer.nsn : '',
+      search:    _rptCustomer ? '' : custInput.value.trim(),
+      status:    document.getElementById('rptStatus').value,
+      date_from: from, date_to: to,
+    });
+    try {
+      const { data } = await API.get(`/api/reports/complaints?${p}`);
+      renderReportResults(wrap, data, _rptCustomer);
+      const exportBtn = document.getElementById('rptExportBtn');
+      if (data.length) {
+        exportBtn.style.opacity = '1'; exportBtn.style.pointerEvents = '';
+        exportBtn.href = `/api/export/complaints?${p}`;
+      } else {
+        exportBtn.style.opacity = '.4'; exportBtn.style.pointerEvents = 'none';
+        exportBtn.href = '#';
+      }
+    } catch(e) {
+      wrap.innerHTML = `<div class="empty-state"><p class="text-danger">${esc(e.message)}</p></div>`;
+    }
+  };
+
+  document.getElementById('rptSearchBtn').addEventListener('click', load);
+  custInput.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+}
+
+function renderReportResults(wrap, data, customer) {
+  if (!data.length) {
+    wrap.innerHTML = `
+      <div class="empty-state">
+        <i data-lucide="file-search"></i>
+        <h3>No complaints found</h3>
+        <p>Try changing the filters or selecting a different customer.</p>
+      </div>`;
+    lucide.createIcons({ nodes: [wrap] }); return;
+  }
+
+  // Summary stats
+  const total    = data.length;
+  const open     = data.filter(c => c.status === 'Open').length;
+  const progress = data.filter(c => c.status === 'In Progress').length;
+  const resolved = data.filter(c => c.status === 'Resolved' || c.status === 'Closed').length;
+
+  const customerCard = customer ? `
+    <div class="card rpt-cust-card">
+      <div class="card-body rpt-cust-body">
+        <div class="rpt-cust-avatar"><i data-lucide="user"></i></div>
+        <div class="rpt-cust-info">
+          <div class="rpt-cust-name">${esc(customer.new_party_name)}</div>
+          <div class="rpt-cust-details">
+            <span><i data-lucide="hash"></i> NSN: <b>${customer.nsn}</b></span>
+            ${customer.contact_no ? `<span><i data-lucide="phone"></i> ${esc(customer.contact_no)}</span>` : ''}
+            ${customer.area       ? `<span><i data-lucide="map-pin"></i> ${esc(customer.area)}</span>` : ''}
+          </div>
+          ${customer.address ? `<div class="rpt-cust-addr">${esc(customer.address)}</div>` : ''}
+        </div>
+        <div class="rpt-cust-badge">${warrantyBadge(customer.install_date)}</div>
+      </div>
+    </div>` : '';
+
+  wrap.innerHTML = `
+    ${customerCard}
+    <div class="rpt-summary-row">
+      ${[
+        ['Total',       total,    'layers',       '#2563eb','#eff6ff'],
+        ['Open',        open,     'alert-circle', '#d97706','#fef3c7'],
+        ['In Progress', progress, 'clock',        '#7c3aed','#ede9fe'],
+        ['Resolved',    resolved, 'check-circle', '#059669','#d1fae5'],
+      ].map(([label, val, icon, color, bg]) => `
+        <div class="rpt-sum-card">
+          <div class="rpt-sum-icon" style="background:${bg};color:${color}"><i data-lucide="${icon}"></i></div>
+          <div class="rpt-sum-val">${val}</div>
+          <div class="rpt-sum-label">${label}</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Complaint History</span>
+        <span class="badge badge-info">${total} record${total!==1?'s':''}</span>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>Complaint No</th>
+            ${!customer ? '<th>Customer</th><th>NSN</th>' : ''}
+            <th>Complain</th><th>Status</th>
+            <th>Logged On</th><th>Resolved On</th>
+          </tr></thead>
+          <tbody>
+            ${data.map(c => `
+              <tr>
+                <td><span class="mono-tag">${esc(c.complaint_no)}</span></td>
+                ${!customer ? `
+                  <td>
+                    <div class="fw-600">${esc(c.new_party_name)}</div>
+                    <div class="td-muted">${esc(c.area||'')}</div>
+                  </td>
+                  <td><span class="mono-tag">${c.nsn}</span></td>` : ''}
+                <td style="max-width:240px;white-space:normal;line-height:1.4">${esc(c.remarks||'—')}</td>
+                <td>${statusBadge(c.status)}</td>
+                <td class="td-muted" style="white-space:nowrap">${fmtDateTime(c.created_at)}</td>
+                <td class="td-muted" style="white-space:nowrap">${c.resolved_at ? fmtDateTime(c.resolved_at) : '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  lucide.createIcons({ nodes: [wrap] });
+}
+
 // ─── Sync Status ──────────────────────────────────────────────────────────────
 function timeAgo(iso) {
   if (!iso) return null;
@@ -1580,7 +1938,8 @@ window.openCustomerForm = openCustomerForm;
   lucide.createIcons();
   startClock();
   await preload();
-  await syncPoll();
+  await Promise.all([waPoll(), syncPoll()]);
   navigate('dashboard');
+  setInterval(waPoll,   15000);
   setInterval(syncPoll, 30000);
 })();

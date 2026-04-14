@@ -12,16 +12,18 @@ const EventEmitter = require('events');
 class WhatsAppService extends EventEmitter {
   constructor() {
     super();
-    this._client  = null;
-    this._status  = 'off';      // off | init | qr | ready | auth_fail | disconnected
-    this._qrUrl   = null;       // base64 data-URL of current QR image
-    this._info    = null;       // connected account info
+    this._client    = null;
+    this._status    = 'off';      // off | init | qr | ready | auth_fail | disconnected | error
+    this._qrUrl     = null;       // base64 data-URL of current QR image
+    this._info      = null;       // connected account info
+    this._lastError = null;       // last error message for display
   }
 
-  get status()  { return this._status; }
-  get qrUrl()   { return this._qrUrl;  }
-  get info()    { return this._info;   }
-  get isReady() { return this._status === 'ready'; }
+  get status()    { return this._status;    }
+  get qrUrl()     { return this._qrUrl;     }
+  get info()      { return this._info;      }
+  get lastError() { return this._lastError; }
+  get isReady()   { return this._status === 'ready'; }
 
   // ── Start client ────────────────────────────────────────────────────────────
   connect() {
@@ -29,6 +31,7 @@ class WhatsAppService extends EventEmitter {
 
     this._setStatus('init');
 
+    this._lastError = null;
     this._client = new Client({
       authStrategy: new LocalAuth({
         dataPath: path.join(__dirname, '..', '.wwebjs_auth'),
@@ -40,11 +43,10 @@ class WhatsAppService extends EventEmitter {
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-default-apps',
         ],
-      },
-      webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
       },
     });
 
@@ -65,33 +67,54 @@ class WhatsAppService extends EventEmitter {
     });
 
     this._client.on('ready', async () => {
-      this._info = this._client.info;
+      this._info        = this._client.info;
+      this._groupsCache = null; // force fresh fetch after connect
       this._setStatus('ready');
     });
 
-    this._client.on('disconnected', (reason) => {
+    this._client.on('disconnected', async (reason) => {
       console.log('[WA] Disconnected:', reason);
-      this._info   = null;
-      this._qrUrl  = null;
+      this._info        = null;
+      this._qrUrl       = null;
+      this._groupsCache = null;
+      const c = this._client;
       this._client = null;
       this._setStatus('disconnected');
+      // Kill browser process so file locks are released before any reconnect
+      await this._destroyClient(c);
     });
 
-    this._client.initialize().catch(err => {
+    this._client.initialize().catch(async err => {
       console.error('[WA] Init error:', err.message);
+      this._lastError = err.message;
+      const c = this._client;
       this._client = null;
       this._setStatus('error');
+      await this._destroyClient(c);
     });
+  }
+
+  // ── Safely destroy a client + close its browser ───────────────────────────────
+  async _destroyClient(client) {
+    if (!client) return;
+    try {
+      // Close puppeteer browser first to release file locks (e.g. first_party_sets.db)
+      if (client.pupBrowser) {
+        await client.pupBrowser.close().catch(() => {});
+        await new Promise(r => setTimeout(r, 800)); // let OS release file handles
+      }
+      await client.destroy().catch(() => {});
+    } catch (_) {}
   }
 
   // ── Disconnect ───────────────────────────────────────────────────────────────
   async disconnect() {
-    if (!this._client) return;
-    try { await this._client.destroy(); } catch(_) {}
+    const c = this._client;
     this._client = null;
     this._info   = null;
     this._qrUrl  = null;
     this._setStatus('off');
+    await this._destroyClient(c);
   }
 
   // ── Send a text message ───────────────────────────────────────────────────────
@@ -100,14 +123,77 @@ class WhatsAppService extends EventEmitter {
     await this._client.sendMessage(chatId, text);
   }
 
+  // ── Send message to a group by name (case-insensitive) ───────────────────────
+  async sendToGroup(groupName, text) {
+    if (!this.isReady) return;   // silently skip if WA not connected
+    try {
+      const groups = await this.getGroups();
+      const group = groups.find(c =>
+        c.name.toLowerCase() === groupName.toLowerCase());
+      if (!group) {
+        console.warn(`[WA] Group "${groupName}" not found`);
+        return;
+      }
+      await new Promise(r => setTimeout(r, 1500)); // small delay — anti-spam
+      await this._client.sendMessage(group.id, text);
+      console.log(`[WA] Sent to group "${groupName}"`);
+    } catch (err) {
+      console.error('[WA] sendToGroup error:', err.message);
+    }
+  }
+
   // ── List all groups this account is in ───────────────────────────────────────
   async getGroups() {
     if (!this.isReady) throw new Error('WhatsApp is not connected.');
-    const chats = await this._client.getChats();
-    return chats
-      .filter(c => c.isGroup)
-      .map(c => ({ id: c.id._serialized, name: c.name, members: c.participants?.length || 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // Return cached list if fetched within last 60 seconds
+    const now = Date.now();
+    if (this._groupsCache && (now - this._groupsCacheAt) < 60000) {
+      return this._groupsCache;
+    }
+    // Read directly from WhatsApp Web's in-memory store — much faster than getChats()
+    const groups = await this._client.pupPage.evaluate(async () => {
+      try {
+        // Try multiple store access patterns across WA Web versions
+        let models = [];
+        if (window.Store?.Chat?.getModelsArray) {
+          models = await window.Store.Chat.getModelsArray();
+        } else if (window.Store?.Chat?.models) {
+          models = window.Store.Chat.models;
+        } else if (window.WWebJS?.getChats) {
+          models = await window.WWebJS.getChats();
+        }
+        return models
+          .filter(c => c.isGroup)
+          .map(c => ({
+            id:      c.id?._serialized || '',
+            name:    c.name || c.formattedTitle || c.id?.user || '',
+            members: c.groupMetadata?.participants?.length ||
+                     c.participants?.length || 0,
+          }))
+          .filter(c => c.id)
+          .sort((a, b) => a.name.localeCompare(b.name));
+      } catch (e) {
+        return [];
+      }
+    });
+    // If store returned nothing, fall back to getChats() with a 20s timeout
+    if (!groups.length) {
+      console.log('[WA] Store returned 0 groups, falling back to getChats()…');
+      const chats = await Promise.race([
+        this._client.getChats(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('getChats timed out')), 20000)),
+      ]);
+      const fallback = chats
+        .filter(c => c.isGroup)
+        .map(c => ({ id: c.id._serialized, name: c.name, members: c.participants?.length || 0 }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      this._groupsCache   = fallback;
+      this._groupsCacheAt = now;
+      return fallback;
+    }
+    this._groupsCache   = groups;
+    this._groupsCacheAt = now;
+    return groups;
   }
 
   // ── List contacts (for sending to individual engineers) ───────────────────────

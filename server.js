@@ -1,5 +1,9 @@
 'use strict';
 
+// ─── Prevent stray errors (e.g. EBUSY from whatsapp-web.js cleanup) from crashing server ──
+process.on('uncaughtException',     err => console.error('[Process] Uncaught exception:', err.message));
+process.on('unhandledRejection',    err => console.error('[Process] Unhandled rejection:', err?.message || err));
+
 const express = require('express');
 const { DatabaseSync } = require('node:sqlite');
 const path    = require('path');
@@ -474,15 +478,42 @@ app.get('/api/complaints/stats', (_req, res) => {
     const row = get(`
       SELECT
         (SELECT COUNT(*) FROM complaints
-           WHERE DATE(created_at,'localtime')=DATE('now','localtime'))                      AS today,
+           WHERE DATE(created_at,'localtime')=DATE('now','localtime'))                         AS today,
         (SELECT COUNT(*) FROM complaints
-           WHERE DATE(created_at,'localtime')=DATE('now','localtime','-1 day'))             AS yesterday,
+           WHERE DATE(created_at,'localtime')=DATE('now','localtime','-1 day'))                AS yesterday,
         (SELECT COUNT(*) FROM complaints
            WHERE strftime('%Y-%m',created_at,'localtime')=strftime('%Y-%m','now','localtime')) AS this_month,
-        (SELECT COUNT(*) FROM complaints
-           WHERE strftime('%Y',created_at,'localtime')=strftime('%Y','now','localtime'))    AS this_year
+        (SELECT COUNT(*) FROM complaints)                                                       AS total
     `);
     ok(res, row);
+  } catch(e) { fail(res, e.message, 500); }
+});
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+app.get('/api/reports/complaints', (req, res) => {
+  try {
+    const { search, nsn, date_from, date_to, status } = req.query;
+    const conditions = [];
+    const params = [];
+    if (search)    { conditions.push(`(cu.new_party_name LIKE ? OR cu.party_name LIKE ?)`); params.push(`%${search}%`, `%${search}%`); }
+    if (nsn)       { conditions.push(`cu.nsn = ?`);                                         params.push(nsn); }
+    if (date_from) { conditions.push(`DATE(c.created_at,'localtime') >= ?`);                params.push(date_from); }
+    if (date_to)   { conditions.push(`DATE(c.created_at,'localtime') <= ?`);                params.push(date_to); }
+    if (status)    { conditions.push(`c.status = ?`);                                       params.push(status); }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = all(`
+      SELECT c.id, c.complaint_no, c.complaint_type, c.remarks, c.status, c.priority,
+             c.created_at, c.resolved_at,
+             cu.nsn, cu.new_party_name, cu.contact_no, cu.address, cu.area,
+             e.name AS engineer_name
+      FROM complaints c
+      JOIN customers cu ON c.customer_id = cu.id
+      LEFT JOIN engineers e ON c.engineer_id = e.id
+      ${where}
+      ORDER BY c.created_at DESC
+      LIMIT 500
+    `, ...params);
+    ok(res, rows);
   } catch(e) { fail(res, e.message, 500); }
 });
 
@@ -859,6 +890,7 @@ app.get('/api/whatsapp/status', (_req, res) => {
       account:     wa.info ? (wa.info.pushname || wa.info.wid?.user || null) : null,
       target_id:   target?.value || null,
       target_name: tname?.value  || null,
+      lastError:   wa.lastError  || null,
     });
   } catch(e) { fail(res, e.message, 500); }
 });
@@ -887,8 +919,12 @@ app.post('/api/whatsapp/disconnect', async (_req, res) => {
 // Groups & contacts
 app.get('/api/whatsapp/groups', async (_req, res) => {
   try {
-    ok(res, await wa.getGroups());
-  } catch(e) { fail(res, e.message, 400); }
+    const groups = await wa.getGroups();
+    ok(res, groups);
+  } catch(e) {
+    console.error('[WA] getGroups error:', e.message);
+    fail(res, e.message, 400);
+  }
 });
 
 app.get('/api/whatsapp/contacts', async (_req, res) => {
