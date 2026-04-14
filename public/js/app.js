@@ -602,10 +602,10 @@ async function customers(el) {
           <i data-lucide="refresh-cw"></i> Sync from XLSX
         </button>
         <button class="btn btn-secondary" id="importXlsxBtn" title="Import customers from any Excel file">
-          <i data-lucide="upload"></i> Import XLSX
+          <i data-lucide="file-down"></i> Import XLSX
         </button>
         <a class="btn btn-secondary" href="/api/export/customers" download title="Download customers as Excel">
-          <i data-lucide="download"></i> Export XLSX
+          <i data-lucide="file-up"></i> Export XLSX
         </a>
         <button class="btn btn-primary" id="addCustomerBtn">
           <i data-lucide="user-plus"></i> Add Customer
@@ -707,7 +707,7 @@ async function customers(el) {
       } catch(e) { toast(e.message, 'danger'); }
       finally {
         btn.disabled = false;
-        btn.innerHTML = '<i data-lucide="upload"></i> Import XLSX';
+        btn.innerHTML = '<i data-lucide="file-down"></i> Import XLSX';
         lucide.createIcons({ nodes: [btn] });
         fileInput.value = '';
       }
@@ -942,7 +942,7 @@ async function complaints(el) {
       </div>
       <div style="display:flex;gap:8px">
         <a class="btn btn-secondary" href="/api/export/complaints" download title="Export to Excel">
-          <i data-lucide="download"></i> Export XLSX
+          <i data-lucide="file-up"></i> Export XLSX
         </a>
         <button class="btn btn-primary" onclick="navigate('new-complaint')">
           <i data-lucide="plus"></i> New Complaint
@@ -1736,7 +1736,7 @@ async function reportsPage(el) {
         <div class="page-header-sub">Customer complaint history &amp; date-wise reports</div>
       </div>
       <a class="btn btn-secondary" id="rptExportBtn" href="#" style="pointer-events:none;opacity:.4">
-        <i data-lucide="download"></i> Export XLSX
+        <i data-lucide="file-up"></i> Export XLSX
       </a>
     </div>
 
