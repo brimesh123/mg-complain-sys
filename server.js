@@ -124,6 +124,31 @@ function all(sql, ...params) {
   return db.prepare(sql).all(...params);
 }
 
+// Parse install date from any format Excel might give us
+function parseInstallDate(raw) {
+  if (!raw) return null;
+  if (raw instanceof Date)         return raw.toISOString().split('T')[0];
+  if (typeof raw === 'number') {
+    const d = XLSX.SSF.parse_date_code(raw);
+    if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;                          // 2022-12-30
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {                               // 30/12/2022
+      const [d, m, y] = s.split('/');
+      return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+    if (/^\d{2}-\d{2}-\d{4}$/.test(s)) {                                 // 30-12-2022
+      const [d, m, y] = s.split('-');
+      return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+    const parsed = new Date(s);
+    if (!isNaN(parsed)) return parsed.toISOString().split('T')[0];
+  }
+  return null;
+}
+
 function logEvent(type, desc) {
   try { run(`INSERT INTO logs (event_type,description) VALUES (?,?)`, type, desc); }
   catch(e) { console.error('[log]', e.message); }
@@ -268,6 +293,23 @@ app.put('/api/customers/:id', (req, res) => {
   }
 });
 
+// Bulk delete — must be defined BEFORE /:id route so Express doesn't treat "bulk" as an id
+app.delete('/api/customers/bulk', (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) return fail(res, 'No IDs provided');
+    const linked = get(
+      `SELECT COUNT(*) AS n FROM complaints WHERE customer_id IN (${ids.map(()=>'?').join(',')})`,
+      ...ids
+    ).n;
+    if (linked > 0) return fail(res, `Cannot delete: ${linked} complaint(s) are linked to selected customers. Resolve or delete those complaints first.`);
+    run(`DELETE FROM customers WHERE id IN (${ids.map(()=>'?').join(',')})`, ...ids);
+    logEvent('customer-delete', `Bulk delete — ${ids.length} customers removed`);
+    scheduleSyncWrite();
+    ok(res, { deleted: ids.length });
+  } catch(e) { fail(res, e.message, 500); }
+});
+
 app.delete('/api/customers/:id', (req, res) => {
   try {
     const row = get(`SELECT id, nsn, COALESCE(new_party_name,party_name) AS name FROM customers WHERE id=?`, req.params.id);
@@ -385,6 +427,18 @@ app.put('/api/complaints/:id', (req, res) => {
     logEvent('complaint-update', `Complaint ${row.complaint_no} updated — ${row.status} · ${row.complaint_type}`);
     scheduleSyncWrite();
     ok(res, row);
+  } catch(e) { fail(res, e.message, 500); }
+});
+
+// Bulk delete — before /:id so "bulk" isn't treated as an id
+app.delete('/api/complaints/bulk', (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) return fail(res, 'No IDs provided');
+    run(`DELETE FROM complaints WHERE id IN (${ids.map(()=>'?').join(',')})`, ...ids);
+    logEvent('complaint-delete', `Bulk delete — ${ids.length} complaints removed`);
+    scheduleSyncWrite();
+    ok(res, { deleted: ids.length });
   } catch(e) { fail(res, e.message, 500); }
 });
 
@@ -622,38 +676,38 @@ app.post('/api/import/customers', (req, res) => {
     const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
 
     const stmt = db.prepare(`
-      INSERT OR IGNORE INTO customers
+      INSERT INTO customers
         (nsn, osn, party_name, new_party_name, contact_no, address, area, install_date, status)
       VALUES (?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(nsn) DO UPDATE SET
+        osn=excluded.osn, party_name=excluded.party_name,
+        new_party_name=excluded.new_party_name, contact_no=excluded.contact_no,
+        address=excluded.address, area=excluded.area,
+        install_date=excluded.install_date, status=excluded.status
     `);
 
-    let added = 0, skipped = 0;
+    let added = 0, updated = 0, skipped = 0;
     for (const r of rows) {
       const nsn = r['NSN'] || r['NEW SN'] || r['nsn'];
       if (!nsn || isNaN(Number(nsn))) { skipped++; continue; }
       const pname  = String(r['PARTY NAME'] || r['NEW NAME / NEW PARTY'] || '').trim();
       if (!pname) { skipped++; continue; }
       const npname = String(r['NEW NAME / NEW PARTY'] || r['NEW PARTY'] || pname).trim();
-      const osn    = String(r['OSN'] || '').trim() || null;
+      const osn    = String(r['OSN'] || r['OLD SN'] || '').trim() || null;
       const contact= r['CONTACT NO'] ? String(r['CONTACT NO']).trim() : null;
       const addr   = r['ADDRESS']    ? String(r['ADDRESS']).trim()    : null;
       const area   = r['AREA']       ? String(r['AREA']).trim()       : null;
       const status = r['ON/OFF'] === 'OFF' ? 'OFF' : 'ON';
-      let idate = null;
-      const raw = r['INSTALL DATE'];
-      if (raw instanceof Date)             idate = raw.toISOString().split('T')[0];
-      else if (raw && typeof raw === 'number') {
-        const d = XLSX.SSF.parse_date_code(raw);
-        if (d) idate = `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
-      }
-      const result = stmt.run(Number(nsn), osn, pname, npname, contact, addr, area, idate, status);
-      result.changes > 0 ? added++ : skipped++;
+      const idate  = parseInstallDate(r['INSTALL DATE']);
+      const exists = get(`SELECT id FROM customers WHERE nsn=?`, Number(nsn));
+      stmt.run(Number(nsn), osn, pname, npname, contact, addr, area, idate, status);
+      exists ? updated++ : added++;
     }
-    if (added > 0) {
-      logEvent('import', `Bulk import — ${added} customers added from Excel (${skipped} skipped)`);
+    if (added + updated > 0) {
+      logEvent('import', `Excel import — ${added} added, ${updated} updated (${skipped} skipped)`);
       scheduleSyncWrite();
     }
-    ok(res, { added, skipped, total: rows.length });
+    ok(res, { added, updated, skipped, total: rows.length });
   } catch(e) { fail(res, e.message, 500); }
 });
 
@@ -665,15 +719,12 @@ function _fmtDate(iso) {
 
 // ─── Sync (DB ↔ sync.xlsx live backup) ───────────────────────────────────────
 const SYNC_PATH = path.join(DATA_DIR, 'sync.xlsx');
-let _syncTimer   = null;
-let _importTimer = null;
-let _ourWrite    = false;
-let _lastExport  = null;
-let _lastImport  = null;
+let _syncTimer  = null;
+let _lastExport = null;
+let _lastImport = null;
 
 function writeSyncXlsx() {
   try {
-    _ourWrite = true;
     const wb = XLSX.utils.book_new();
 
     // Sheet 1: Customers
@@ -735,8 +786,6 @@ function writeSyncXlsx() {
     console.log(`  [sync] Saved → sync.xlsx  (${custs.length} customers, ${comps.length} complaints, ${engs.length} engineers)`);
   } catch(e) {
     console.error(`  [sync] Export error:`, e.message);
-  } finally {
-    setTimeout(() => { _ourWrite = false; }, 800);
   }
 }
 
@@ -776,15 +825,7 @@ function importFromXlsx() {
         const area    = r['AREA']       ? String(r['AREA']).trim()       : null;
         const notes   = r['NOTES']      ? String(r['NOTES']).trim()      : null;
         const status  = r['ON/OFF'] === 'OFF' ? 'OFF' : 'ON';
-        let idate = null;
-        const raw = r['INSTALL DATE'];
-        if (raw instanceof Date) idate = raw.toISOString().split('T')[0];
-        else if (raw && typeof raw === 'number') {
-          const d = XLSX.SSF.parse_date_code(raw);
-          if (d) idate = `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
-        } else if (raw && typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-          idate = raw;
-        }
+        const idate = parseInstallDate(r['INSTALL DATE']);
         if (upsert.run(Number(nsn), osn, pname, npname, contact, addr, area, idate, status, notes).changes > 0) custChanged++;
       }
     }
@@ -817,16 +858,8 @@ function importFromXlsx() {
 }
 
 // Watch sync.xlsx for external changes (e.g. user edits it in Excel and saves)
-fs.watchFile(SYNC_PATH, { interval: 3000, persistent: false }, (curr, prev) => {
-  if (_ourWrite) return;
-  if (curr.mtime.getTime() <= prev.mtime.getTime()) return;
-  clearTimeout(_importTimer);
-  _importTimer = setTimeout(() => {
-    console.log('  [sync] External edit detected — importing from sync.xlsx...');
-    const result = importFromXlsx();
-    if ((result.custChanged + result.engChanged) > 0) setTimeout(scheduleSyncWrite, 500);
-  }, 1500);
-});
+// Reverse sync (XLSX → DB) intentionally disabled.
+// sync.xlsx is an export/backup only — all changes must be made through the app.
 
 app.get('/api/sync/status', (_req, res) => {
   try {

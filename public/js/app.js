@@ -35,7 +35,7 @@ const API = {
   get:    url       => API.req('GET',    url),
   post:   (url, b)  => API.req('POST',   url, b),
   put:    (url, b)  => API.req('PUT',    url, b),
-  delete: url       => API.req('DELETE', url),
+  delete: (url, b)  => API.req('DELETE', url, b),
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -630,6 +630,13 @@ async function customers(el) {
           </select>
         </div>
       </div>
+      <div id="custBulkBar" style="display:none;padding:10px 16px;background:var(--primary-light);border-bottom:1px solid var(--primary-border);display:none;align-items:center;gap:12px">
+        <span id="custBulkCount" style="font-size:13px;font-weight:600;color:var(--primary)"></span>
+        <button class="btn btn-sm btn-danger" id="custBulkDeleteBtn">
+          <i data-lucide="trash-2"></i> Delete Selected
+        </button>
+        <button class="btn btn-sm btn-secondary" id="custBulkClearBtn">Clear Selection</button>
+      </div>
       <div id="custTableWrap"><div class="page-loading"><div class="spinner"></div></div></div>
     </div>`;
   lucide.createIcons({ nodes: [el] });
@@ -693,7 +700,7 @@ async function customers(el) {
       lucide.createIcons({ nodes: [btn] });
       try {
         const { data: r } = await API.post('/api/import/customers', { data: b64 });
-        toast(`Imported ${r.added} new customers (${r.skipped} skipped)`, 'success');
+        toast(`Import done: ${r.added} added, ${r.updated} updated, ${r.skipped} skipped`, r.added+r.updated > 0 ? 'success' : 'info');
         await preload();
         S.customers.page = 1;
         load();
@@ -720,12 +727,14 @@ function renderCustomerTable(wrap, data, total) {
     <div class="table-wrapper">
       <table>
         <thead><tr>
+          <th style="width:36px"><input type="checkbox" id="custSelectAll" title="Select all" /></th>
           <th>NSN</th><th>OSN</th><th>Party Name</th><th>Contact</th>
           <th>Area</th><th>Status</th><th>Complaints</th><th>Actions</th>
         </tr></thead>
         <tbody>
           ${data.map(c => `
-            <tr>
+            <tr data-id="${c.id}">
+              <td><input type="checkbox" class="cust-chk" value="${c.id}" /></td>
               <td><span class="mono-tag">${c.nsn}</span></td>
               <td class="td-muted">${esc(c.osn||'—')}</td>
               <td>
@@ -770,6 +779,54 @@ function renderCustomerTable(wrap, data, total) {
       </div>
     </div>`;
   lucide.createIcons({ nodes: [wrap] });
+
+  // ── Bulk selection logic ─────────────────────────────────────────────────────
+  const bulkBar   = document.getElementById('custBulkBar');
+  const bulkCount = document.getElementById('custBulkCount');
+  const selectAll = document.getElementById('custSelectAll');
+
+  const updateBulkBar = () => {
+    const checked = document.querySelectorAll('.cust-chk:checked');
+    if (checked.length > 0) {
+      bulkBar.style.display = 'flex';
+      bulkCount.textContent = `${checked.length} customer${checked.length>1?'s':''} selected`;
+    } else {
+      bulkBar.style.display = 'none';
+    }
+    selectAll.indeterminate = checked.length > 0 && checked.length < data.length;
+    selectAll.checked = checked.length === data.length;
+  };
+
+  selectAll.addEventListener('change', () => {
+    document.querySelectorAll('.cust-chk').forEach(cb => cb.checked = selectAll.checked);
+    updateBulkBar();
+  });
+  document.querySelectorAll('.cust-chk').forEach(cb =>
+    cb.addEventListener('change', updateBulkBar));
+
+  document.getElementById('custBulkClearBtn').onclick = () => {
+    document.querySelectorAll('.cust-chk').forEach(cb => cb.checked = false);
+    selectAll.checked = false;
+    updateBulkBar();
+  };
+
+  document.getElementById('custBulkDeleteBtn').onclick = async () => {
+    const ids = [...document.querySelectorAll('.cust-chk:checked')].map(cb => parseInt(cb.value));
+    if (!ids.length) return;
+    const ok = await confirmDialog(
+      'Delete Customers',
+      `Delete ${ids.length} selected customer${ids.length>1?'s':''}? This cannot be undone.`,
+      { danger: true, confirmText: `Delete ${ids.length}` }
+    );
+    if (!ok) return;
+    try {
+      await API.delete('/api/customers/bulk', { ids });
+      toast(`${ids.length} customer${ids.length>1?'s':''} deleted`, 'success');
+      S.customers.page = 1;
+      // reload page
+      navigate('customers');
+    } catch(e) { toast(e.message, 'danger'); }
+  };
 }
 
 window.custPage = p => { S.customers.page = p; navigate('customers'); };
@@ -916,6 +973,13 @@ async function complaints(el) {
           <input type="date" class="form-control" id="cmpTo"   style="width:140px" value="${S.complaints.date_to}"   title="To date" />
         </div>
       </div>
+      <div id="cmpBulkBar" style="display:none;padding:10px 16px;background:var(--primary-light);border-bottom:1px solid var(--primary-border);align-items:center;gap:12px">
+        <span id="cmpBulkCount" style="font-size:13px;font-weight:600;color:var(--primary)"></span>
+        <button class="btn btn-sm btn-danger" id="cmpBulkDeleteBtn">
+          <i data-lucide="trash-2"></i> Delete Selected
+        </button>
+        <button class="btn btn-sm btn-secondary" id="cmpBulkClearBtn">Clear Selection</button>
+      </div>
       <div id="cmpTableWrap"><div class="page-loading"><div class="spinner"></div></div></div>
     </div>`;
   lucide.createIcons({ nodes: [el] });
@@ -979,12 +1043,14 @@ function renderComplaintTable(wrap, data, total) {
     <div class="table-wrapper">
       <table>
         <thead><tr>
+          <th style="width:36px"><input type="checkbox" id="cmpSelectAll" title="Select all" /></th>
           <th>Complaint No</th><th>Customer</th><th>Type</th>
           <th>Engineer</th><th>Priority</th><th>Status</th><th>Date</th><th>Actions</th>
         </tr></thead>
         <tbody>
           ${data.map(c => `
             <tr>
+              <td><input type="checkbox" class="cmp-chk" value="${c.id}" /></td>
               <td><span class="mono-tag row-link" onclick="openComplaintDetail(${c.id})">${esc(c.complaint_no)}</span></td>
               <td>
                 <div class="fw-600">${esc(c.new_party_name)}</div>
@@ -1018,6 +1084,49 @@ function renderComplaintTable(wrap, data, total) {
       </div>
     </div>`;
   lucide.createIcons({ nodes: [wrap] });
+
+  // ── Bulk selection logic ─────────────────────────────────────────────────────
+  const bulkBar   = document.getElementById('cmpBulkBar');
+  const bulkCount = document.getElementById('cmpBulkCount');
+  const selectAll = document.getElementById('cmpSelectAll');
+
+  const updateBulkBar = () => {
+    const checked = document.querySelectorAll('.cmp-chk:checked');
+    bulkBar.style.display = checked.length > 0 ? 'flex' : 'none';
+    if (checked.length) bulkCount.textContent = `${checked.length} complaint${checked.length>1?'s':''} selected`;
+    selectAll.indeterminate = checked.length > 0 && checked.length < data.length;
+    selectAll.checked = checked.length === data.length;
+  };
+
+  selectAll.addEventListener('change', () => {
+    document.querySelectorAll('.cmp-chk').forEach(cb => cb.checked = selectAll.checked);
+    updateBulkBar();
+  });
+  document.querySelectorAll('.cmp-chk').forEach(cb =>
+    cb.addEventListener('change', updateBulkBar));
+
+  document.getElementById('cmpBulkClearBtn').onclick = () => {
+    document.querySelectorAll('.cmp-chk').forEach(cb => cb.checked = false);
+    selectAll.checked = false;
+    updateBulkBar();
+  };
+
+  document.getElementById('cmpBulkDeleteBtn').onclick = async () => {
+    const ids = [...document.querySelectorAll('.cmp-chk:checked')].map(cb => parseInt(cb.value));
+    if (!ids.length) return;
+    const ok = await confirmDialog(
+      'Delete Complaints',
+      `Permanently delete ${ids.length} selected complaint${ids.length>1?'s':''}? This cannot be undone.`,
+      { danger: true, confirmText: `Delete ${ids.length}` }
+    );
+    if (!ok) return;
+    try {
+      await API.delete('/api/complaints/bulk', { ids });
+      toast(`${ids.length} complaint${ids.length>1?'s':''} deleted`, 'success');
+      S.complaints.page = 1;
+      navigate('complaints');
+    } catch(e) { toast(e.message, 'danger'); }
+  };
 }
 
 window.cmpPage = p => { S.complaints.page = p; navigate('complaints'); };
