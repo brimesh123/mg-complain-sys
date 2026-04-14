@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'mogal-complain-sys',
       script: 'server.js',
-      node_args: '--experimental-sqlite',
+      node_args: '',
       env: {
         NODE_ENV: 'production',
         PORT: 3050,
