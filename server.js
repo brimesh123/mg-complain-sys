@@ -945,6 +945,8 @@ app.post('/api/whatsapp/connect', (_req, res) => {
 app.post('/api/whatsapp/disconnect', async (_req, res) => {
   try {
     await wa.disconnect();
+    // Clear the stored default group so it doesn't carry over to a new session
+    run(`DELETE FROM settings WHERE key IN ('wa_target_id', 'wa_target_name')`);
     ok(res, { status: wa.status });
   } catch(e) { fail(res, e.message, 500); }
 });

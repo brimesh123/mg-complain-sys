@@ -3,6 +3,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode  = require('qrcode');
 const path    = require('path');
+const fs      = require('fs');
 const EventEmitter = require('events');
 
 /**
@@ -62,8 +63,9 @@ class WhatsAppService extends EventEmitter {
     });
 
     this._client.on('auth_failure', () => {
-      this._setStatus('auth_fail');
       this._client = null;
+      this._setStatus('auth_fail');
+      this.clearSessionData();  // bad session — wipe it so QR appears fresh next time
     });
 
     this._client.on('ready', async () => {
@@ -80,8 +82,9 @@ class WhatsAppService extends EventEmitter {
       const c = this._client;
       this._client = null;
       this._setStatus('disconnected');
-      // Kill browser process so file locks are released before any reconnect
+      // Kill browser process so file locks are released before clearing session
       await this._destroyClient(c);
+      this.clearSessionData();  // wipe auth so next connect always shows a fresh QR
     });
 
     this._client.initialize().catch(async err => {
@@ -92,6 +95,19 @@ class WhatsAppService extends EventEmitter {
       this._setStatus('error');
       await this._destroyClient(c);
     });
+  }
+
+  // ── Delete stored session files so next connect shows a fresh QR ─────────────
+  clearSessionData() {
+    const sessionDir = path.join(__dirname, '..', '.wwebjs_auth');
+    try {
+      if (fs.existsSync(sessionDir)) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log('[WA] Session data cleared');
+      }
+    } catch (err) {
+      console.warn('[WA] Could not clear session data:', err.message);
+    }
   }
 
   // ── Safely destroy a client + close its browser ───────────────────────────────
@@ -113,8 +129,10 @@ class WhatsAppService extends EventEmitter {
     this._client = null;
     this._info   = null;
     this._qrUrl  = null;
+    this._groupsCache = null;
     this._setStatus('off');
     await this._destroyClient(c);
+    this.clearSessionData();  // wipe saved session so next connect shows a fresh QR
   }
 
   // ── Send a text message ───────────────────────────────────────────────────────
