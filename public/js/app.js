@@ -1576,10 +1576,12 @@ function setupWaSSE() {
   });
 
   es.addEventListener('groups_ready', () => {
-    // Groups just loaded on the server — refresh the dropdown if user is on WA page
+    // Groups just loaded on the server — refresh the dropdown only if it's still
+    // showing a loading/syncing placeholder (not if user already has groups open)
     if (S.page === 'whatsapp' && WA.status === 'ready') {
       const sel = document.getElementById('waTargetSelect');
-      if (sel) loadWaTargets();
+      const hasRealGroups = sel && sel.options.length > 1 && sel.options[1]?.value;
+      if (sel && !hasRealGroups) loadWaTargets();
     }
   });
 
@@ -1618,25 +1620,24 @@ async function loadWaTargets() {
     const { data: groups } = await API.get('/api/whatsapp/groups');
     sel.disabled = false;
     if (!groups.length) {
-      // Groups still syncing — auto-retry every 8 s with countdown
-      // SSE 'groups_ready' event will also trigger a reload when server is done
-      let secs = 8;
-      const countdownId = setInterval(() => {
-        const s = document.getElementById('waTargetSelect');
-        if (!s || WA.status !== 'ready') { clearInterval(countdownId); return; }
-        secs--;
-        if (secs <= 0) {
-          clearInterval(countdownId);
-          loadWaTargets();
-        } else {
-          s.innerHTML = `<option value="">WhatsApp syncing groups… retrying in ${secs}s</option>`;
-        }
-      }, 1000);
-      sel.innerHTML = `<option value="">WhatsApp syncing groups… retrying in ${secs}s</option>`;
+      // Groups still syncing — show static message and schedule a silent retry.
+      // We do NOT touch innerHTML during the countdown so an open dropdown stays open.
+      sel.innerHTML = `<option value="">WhatsApp syncing groups…</option>`;
       if (retryBtn) {
         retryBtn.style.display = '';
-        retryBtn.onclick = () => { clearInterval(countdownId); loadWaTargets(); };
+        retryBtn.onclick = () => loadWaTargets();
       }
+      // Auto-retry after 8 s, but skip if the dropdown is open (focused)
+      setTimeout(() => {
+        const s = document.getElementById('waTargetSelect');
+        if (!s || WA.status !== 'ready') return;
+        if (document.activeElement === s) {
+          // Defer until user closes the dropdown
+          s.addEventListener('blur', () => loadWaTargets(), { once: true });
+        } else {
+          loadWaTargets();
+        }
+      }, 8000);
       return;
     }
     sel.innerHTML = `
