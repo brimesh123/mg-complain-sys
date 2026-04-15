@@ -1421,7 +1421,7 @@ function renderWaPage(el) {
           ${[
             ['message-circle', 'Click <b>Connect WhatsApp</b> — a QR code will appear on screen.'],
             ['smartphone',     'Open WhatsApp on your phone → tap <b>⋮ Menu → Linked Devices → Link a Device</b> → scan the QR.'],
-            ['check-circle-2', 'After scanning, wait 10–15 seconds then click <b>Refresh Status</b> at the top right if the page does not update automatically.'],
+            ['check-circle-2', 'After scanning, the page will <b>automatically update</b> to Connected within a few seconds.'],
             ['users',          'Once Connected, select your engineer group from the dropdown and click <b>Set Default</b>.'],
             ['send',           'From now on, every new complaint will <b>automatically</b> send a message to that group.'],
             ['shield',         'Session is saved — you only scan QR once. If disconnected, just click Connect again.'],
@@ -1543,7 +1543,51 @@ function renderWaConnBody(s) {
     </div>`;
 }
 
+// ─── Server-Sent Events — real-time WA status (no polling needed) ────────────
+function setupWaSSE() {
+  const es = new EventSource('/api/whatsapp/stream');
+
+  es.addEventListener('status', e => {
+    const d = JSON.parse(e.data);
+    const prev = WA.status;
+    Object.assign(WA, d);
+
+    // Keep nav dot in sync
+    const dot = document.getElementById('navWaDot');
+    if (dot) dot.classList.toggle('visible', d.status === 'ready');
+
+    // Re-render WA page instantly on any status change
+    if (d.status !== prev && S.page === 'whatsapp') {
+      S.page = null; navigate('whatsapp');
+    }
+
+    // Update QR image in-place (avoid full re-render during QR phase)
+    if (d.hasQr && S.page === 'whatsapp') {
+      const img = document.getElementById('waQrImg');
+      if (img) {
+        API.get('/api/whatsapp/qr').then(({ data }) => {
+          const imgNow = document.getElementById('waQrImg');
+          if (imgNow) imgNow.src = data.qr;
+        }).catch(() => {});
+      } else if (d.status !== prev) {
+        S.page = null; navigate('whatsapp');
+      }
+    }
+  });
+
+  es.addEventListener('groups_ready', () => {
+    // Groups just loaded on the server — refresh the dropdown if user is on WA page
+    if (S.page === 'whatsapp' && WA.status === 'ready') {
+      const sel = document.getElementById('waTargetSelect');
+      if (sel) loadWaTargets();
+    }
+  });
+
+  es.onerror = () => { /* EventSource auto-reconnects — no action needed */ };
+}
+
 let _waPollTimer = null;
+// Fallback polling — only used when SSE is unavailable (e.g., old proxy config)
 function startWaStatusPolling(_el) {
   if (_waPollTimer) clearInterval(_waPollTimer);
   _waPollTimer = setInterval(async () => {
@@ -1558,13 +1602,9 @@ function startWaStatusPolling(_el) {
     }
     if (['ready','off','auth_fail','error'].includes(WA.status)) {
       clearInterval(_waPollTimer); _waPollTimer = null;
-      if (S.page === 'whatsapp') {
-        // Force full re-render so connected UI + group list loads fresh
-        S.page = null;
-        navigate('whatsapp');
-      }
+      if (S.page === 'whatsapp') { S.page = null; navigate('whatsapp'); }
     }
-  }, 2500);
+  }, 2000);
 }
 
 async function loadWaTargets() {
@@ -1578,8 +1618,25 @@ async function loadWaTargets() {
     const { data: groups } = await API.get('/api/whatsapp/groups');
     sel.disabled = false;
     if (!groups.length) {
-      sel.innerHTML = `<option value="">No groups found — make sure this number is in a group</option>`;
-      if (retryBtn) retryBtn.style.display = '';
+      // Groups still syncing — auto-retry every 8 s with countdown
+      // SSE 'groups_ready' event will also trigger a reload when server is done
+      let secs = 8;
+      const countdownId = setInterval(() => {
+        const s = document.getElementById('waTargetSelect');
+        if (!s || WA.status !== 'ready') { clearInterval(countdownId); return; }
+        secs--;
+        if (secs <= 0) {
+          clearInterval(countdownId);
+          loadWaTargets();
+        } else {
+          s.innerHTML = `<option value="">WhatsApp syncing groups… retrying in ${secs}s</option>`;
+        }
+      }, 1000);
+      sel.innerHTML = `<option value="">WhatsApp syncing groups… retrying in ${secs}s</option>`;
+      if (retryBtn) {
+        retryBtn.style.display = '';
+        retryBtn.onclick = () => { clearInterval(countdownId); loadWaTargets(); };
+      }
       return;
     }
     sel.innerHTML = `
@@ -1589,10 +1646,9 @@ async function loadWaTargets() {
       ).join('')}`;
   } catch(e) {
     sel.disabled = false;
-    sel.innerHTML = `<option value="">Failed — click Retry</option>`;
+    sel.innerHTML = `<option value="">Error loading groups — click Retry</option>`;
     if (retryBtn) retryBtn.style.display = '';
-    console.error('[WA groups error]', e.message);
-    toast(`Groups: ${e.message}`, 'warning');
+    console.error('[WA groups]', e.message);
   }
 }
 
@@ -2055,7 +2111,8 @@ window.openCustomerForm = openCustomerForm;
   await preload();
   await Promise.all([waPoll(), syncPoll()]);
   navigate('dashboard');
-  // Global WA poll — every 5s, auto-refresh WhatsApp page if status changes
+  setupWaSSE(); // real-time WA status via Server-Sent Events
+  // Fallback poll every 10 s — catches status if SSE drops (proxy restart etc.)
   let _globalWaStatus = WA.status;
   setInterval(async () => {
     await waPoll();
@@ -2063,6 +2120,6 @@ window.openCustomerForm = openCustomerForm;
       _globalWaStatus = WA.status;
       if (S.page === 'whatsapp') { S.page = null; navigate('whatsapp'); }
     }
-  }, 5000);
+  }, 10000);
   setInterval(syncPoll, 30000);
 })();

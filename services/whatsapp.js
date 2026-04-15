@@ -8,31 +8,32 @@ const EventEmitter = require('events');
 
 /**
  * Singleton WhatsApp client service.
- * Emits: 'status_change', 'qr'
+ * Emits: 'status_change', 'qr', 'groups_ready'
  *
- * Group-loading design
- * ─────────────────────
- *  • On 'ready', _fetchGroups() starts in the background (fire-and-forget).
- *  • _fetchGroups() is a single shared promise — concurrent callers don't
- *    trigger duplicate fetches.
- *  • getGroups() polls the cache for up to 30 s, then returns [] so the
- *    HTTP request never hangs the browser.  The background fetch continues
- *    and the next call will hit the warm cache.
- *  • A sessionId stamp prevents a stale fetch (started before a disconnect)
- *    from writing into the new session's cache.
+ * Group loading strategy (fastest first):
+ *   1. Serve from 5-minute cache immediately if warm.
+ *   2. Read window.Store.Chat models directly in the browser page —
+ *      instant when the store is populated, no network round-trip.
+ *      Group IDs always end with @g.us — reliable cross-version filter.
+ *   3. If the store is still empty after 10 s (fresh session syncing),
+ *      fall back to client.getChats() — one shared promise so concurrent
+ *      callers don't stampede.
+ *   4. getGroups() always returns within 30 s so HTTP requests never hang.
+ *   5. When cache is finally populated, 'groups_ready' is emitted so the
+ *      frontend can refresh the group list without user interaction.
  */
 class WhatsAppService extends EventEmitter {
   constructor() {
     super();
     this._client            = null;
-    this._status            = 'off';  // off|init|qr|authenticated|ready|auth_fail|disconnected|error
+    this._status            = 'off';
     this._qrUrl             = null;
     this._info              = null;
     this._lastError         = null;
     this._groupsCache       = null;
     this._groupsCacheAt     = 0;
-    this._groupsLoadPromise = null;   // shared in-flight fetch promise
-    this._sessionId         = 0;      // incremented on every connect()
+    this._groupsLoadPromise = null;
+    this._sessionId         = 0;      // incremented on every connect() call
   }
 
   get status()    { return this._status;    }
@@ -84,8 +85,8 @@ class WhatsAppService extends EventEmitter {
       this._info = this._client.info;
       this._clearGroupState();
       this._setStatus('ready');
-      // Kick off background load — don't await
-      this._fetchGroups().catch(() => {});
+      // Start background group warm-up immediately on ready
+      this._warmGroupCache().catch(() => {});
     });
 
     this._client.on('disconnected', async (reason) => {
@@ -123,85 +124,38 @@ class WhatsAppService extends EventEmitter {
     this.clearSessionData();
   }
 
-  // ── Public: list all groups ───────────────────────────────────────────────────
+  // ── Public: get groups ────────────────────────────────────────────────────────
   async getGroups() {
     if (!this.isReady) throw new Error('WhatsApp is not connected.');
 
-    // Cache hit (5-minute TTL)
+    // 1. Warm cache hit
     if (this._groupsCache && this._groupsCache.length &&
         (Date.now() - this._groupsCacheAt) < 300000) {
       return this._groupsCache;
     }
 
-    // Ensure a background fetch is running, but don't block on it
-    this._fetchGroups().catch(() => {});
+    // 2. Try the in-page store immediately (fast path)
+    const storeGroups = await this._getGroupsFromStore();
+    if (storeGroups && storeGroups.length) {
+      this._setCache(storeGroups);
+      return storeGroups;
+    }
 
-    // Poll the cache for up to 30 s so the HTTP request doesn't hang the browser
+    // 3. Ensure background warm-up is running
+    if (!this._groupsLoadPromise) {
+      this._warmGroupCache().catch(() => {});
+    }
+
+    // 4. Poll cache for up to 30 s — HTTP request never hangs the browser
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 500));
-      if (!this.isReady) throw new Error('WhatsApp disconnected while waiting for groups.');
+      if (!this.isReady) throw new Error('WhatsApp disconnected while loading groups.');
       if (this._groupsCache && this._groupsCache.length) return this._groupsCache;
     }
 
-    // Still not ready — return empty; client should show a "retry" button
-    console.log('[WA] Groups not ready within 30 s — returning empty, client should retry');
+    // 5. Still empty — return [] so client can show "retry" button
+    console.log('[WA] Groups not ready within 30 s — returning empty');
     return [];
-  }
-
-  // ── Internal: single shared fetch (prevents stampede) ────────────────────────
-  _fetchGroups() {
-    if (this._groupsLoadPromise) return this._groupsLoadPromise;
-
-    const sid    = this._sessionId;
-    const client = this._client;
-
-    this._groupsLoadPromise = (async () => {
-      try {
-        console.log('[WA] Fetching groups via getChats()…');
-
-        // Hard 5-minute cap — if getChats() hangs past this, something is broken
-        const chats = await Promise.race([
-          client.getChats(),
-          new Promise((_, rej) =>
-            setTimeout(() => rej(new Error('getChats timed out (5 min)')), 300000)
-          ),
-        ]);
-
-        // Discard result if session changed while we were waiting
-        if (this._sessionId !== sid) {
-          console.log('[WA] Session changed during fetch — discarding stale result');
-          return [];
-        }
-
-        const groups = chats
-          .filter(c => c.isGroup)
-          .map(c => ({
-            id:      c.id._serialized,
-            name:    c.name || c.id.user || '',
-            members: c.participants?.length || 0,
-          }))
-          .filter(c => c.id && c.name)
-          .sort((a, b) => a.name.localeCompare(b.name));
-
-        if (groups.length) {
-          this._groupsCache   = groups;
-          this._groupsCacheAt = Date.now();
-          console.log(`[WA] Groups loaded: ${groups.length}`);
-        } else {
-          console.log('[WA] getChats() returned 0 groups — not caching');
-        }
-        return groups;
-
-      } catch (err) {
-        console.warn('[WA] Group fetch failed:', err.message);
-        return [];
-      } finally {
-        // Only clear the promise if this session is still active
-        if (this._sessionId === sid) this._groupsLoadPromise = null;
-      }
-    })();
-
-    return this._groupsLoadPromise;
   }
 
   // ── Send a text message ───────────────────────────────────────────────────────
@@ -210,7 +164,7 @@ class WhatsAppService extends EventEmitter {
     await this._client.sendMessage(chatId, text);
   }
 
-  // ── Send message to a group by name (case-insensitive) ───────────────────────
+  // ── Send to a group by name ───────────────────────────────────────────────────
   async sendToGroup(groupName, text) {
     if (!this.isReady) return;
     try {
@@ -235,7 +189,7 @@ class WhatsAppService extends EventEmitter {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  // ── Delete stored session so next connect always shows a fresh QR ─────────────
+  // ── Clear stored session so next connect shows a fresh QR ────────────────────
   clearSessionData() {
     const dir = path.join(__dirname, '..', '.wwebjs_auth');
     try {
@@ -248,7 +202,115 @@ class WhatsAppService extends EventEmitter {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  // ── Private: read groups directly from WhatsApp Web's in-memory store ─────────
+  // This is instant (<100 ms) when the store is populated.
+  // WhatsApp group IDs always end with @g.us — reliable across all WW.js versions.
+  async _getGroupsFromStore() {
+    if (!this._client?.pupPage) return null;
+    try {
+      return await this._client.pupPage.evaluate(async () => {
+        const store = window.Store?.Chat;
+        if (!store) return null;
+
+        let models = [];
+        try {
+          // getModelsArray may be async in newer WW.js versions
+          if (typeof store.getModelsArray === 'function') {
+            models = await store.getModelsArray();
+          } else if (typeof store.getModels === 'function') {
+            models = store.getModels() || [];
+          } else if (store.models) {
+            models = Object.values(store.models);
+          }
+        } catch (_) { return null; }
+
+        const groups = (models || [])
+          .filter(m => m?.id?._serialized?.endsWith('@g.us'))
+          .map(m => ({
+            id:      m.id._serialized,
+            name:    m.name || m.formattedTitle || m.id?.user || '',
+            members: m.groupMetadata?.participants?.length || m.participants?.length || 0,
+          }))
+          .filter(g => g.id && g.name)
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        return groups.length ? groups : null;
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Private: warm group cache — store first, then getChats() fallback ─────────
+  async _warmGroupCache() {
+    const sid = this._sessionId;
+
+    // Phase 1: poll the in-memory store every 500 ms for up to 10 s
+    console.log('[WA] Warming group cache (store poll)…');
+    for (let i = 0; i < 20; i++) {
+      if (this._sessionId !== sid || !this.isReady) return;
+      const groups = await this._getGroupsFromStore();
+      if (groups && groups.length) {
+        this._setCache(groups);
+        console.log(`[WA] Groups from store: ${groups.length}`);
+        this.emit('groups_ready', groups);
+        return;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Phase 2: store still empty — fall back to getChats() (one shared promise)
+    if (this._groupsLoadPromise || this._sessionId !== sid) return;
+    console.log('[WA] Store empty after 10 s, falling back to getChats()…');
+    const client = this._client;
+
+    this._groupsLoadPromise = (async () => {
+      try {
+        // 5-minute hard cap — if getChats() hangs past this something is broken
+        const chats = await Promise.race([
+          client.getChats(),
+          new Promise((_, rej) =>
+            setTimeout(() => rej(new Error('getChats timed out (5 min)')), 300000)
+          ),
+        ]);
+
+        if (this._sessionId !== sid) return []; // session changed, discard
+
+        const groups = chats
+          .filter(c => c.isGroup)
+          .map(c => ({
+            id:      c.id._serialized,
+            name:    c.name || c.id.user || '',
+            members: c.participants?.length || 0,
+          }))
+          .filter(g => g.id && g.name)
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        if (groups.length) {
+          this._setCache(groups);
+          console.log(`[WA] Groups from getChats(): ${groups.length}`);
+          this.emit('groups_ready', groups);
+        } else {
+          console.log('[WA] getChats() returned 0 groups — account may have no groups');
+        }
+        return groups;
+      } catch (err) {
+        console.warn('[WA] getChats() failed:', err.message);
+        return [];
+      } finally {
+        if (this._sessionId === sid) this._groupsLoadPromise = null;
+      }
+    })();
+
+    return this._groupsLoadPromise;
+  }
+
+  // ── Private helpers ───────────────────────────────────────────────────────────
+  _setCache(groups) {
+    this._groupsCache   = groups;
+    this._groupsCacheAt = Date.now();
+  }
+
   _clearGroupState() {
     this._groupsCache       = null;
     this._groupsCacheAt     = 0;

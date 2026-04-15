@@ -989,6 +989,47 @@ app.post('/api/whatsapp/send', async (req, res) => {
   } catch(e) { fail(res, e.message, 400); }
 });
 
+// Server-Sent Events — real-time WA status push to browser
+// Nginx must have proxy_buffering off for this location (see nginx.conf.example)
+app.get('/api/whatsapp/stream', (req, res) => {
+  res.setHeader('Content-Type',      'text/event-stream');
+  res.setHeader('Cache-Control',     'no-cache');
+  res.setHeader('Connection',        'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // tell Nginx not to buffer this
+  res.flushHeaders();
+
+  const send = (evt, data) => {
+    try { res.write(`event: ${evt}\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) {}
+  };
+
+  const statusPayload = () => ({
+    status:  wa.status,
+    hasQr:   !!wa.qrUrl,
+    account: wa.info ? (wa.info.pushname || wa.info.wid?.user || null) : null,
+  });
+
+  // Push current state immediately so the browser doesn't wait
+  send('status', statusPayload());
+
+  const onStatus      = ()  => send('status',       statusPayload());
+  const onQr          = ()  => send('status',       statusPayload());
+  const onGroupsReady = (g) => send('groups_ready', { count: g.length });
+
+  wa.on('status_change',  onStatus);
+  wa.on('qr',             onQr);
+  wa.on('groups_ready',   onGroupsReady);
+
+  // Keepalive comment every 25 s — prevents proxies from closing an idle connection
+  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) {} }, 25000);
+
+  req.on('close', () => {
+    clearInterval(ping);
+    wa.off('status_change',  onStatus);
+    wa.off('qr',             onQr);
+    wa.off('groups_ready',   onGroupsReady);
+  });
+});
+
 // ─── Fallback to SPA ──────────────────────────────────────────────────────────
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

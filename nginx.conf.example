@@ -2,6 +2,20 @@ server {
     listen 80;
     server_name YOUR_DOMAIN_OR_IP;
 
+    # SSE (Server-Sent Events) — must be a separate location so Nginx doesn't buffer it
+    location /api/whatsapp/stream {
+        proxy_pass         http://127.0.0.1:3050;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+
+        # Disable all buffering — SSE requires data to flow immediately
+        proxy_buffering    off;
+        proxy_cache        off;
+        proxy_read_timeout 86400s;   # 24 h — keep connection alive
+        chunked_transfer_encoding on;
+    }
+
     location / {
         proxy_pass         http://127.0.0.1:3050;
         proxy_http_version 1.1;
