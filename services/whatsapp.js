@@ -163,38 +163,32 @@ class WhatsAppService extends EventEmitter {
   // ── List all groups this account is in ───────────────────────────────────────
   async getGroups() {
     if (!this.isReady) throw new Error('WhatsApp is not connected.');
-    // Return cached list if fetched within last 60 seconds
+    // Return cached list if fetched within last 60 seconds (only non-empty results)
     const now = Date.now();
-    if (this._groupsCache && (now - this._groupsCacheAt) < 60000) {
+    if (this._groupsCache && this._groupsCache.length && (now - this._groupsCacheAt) < 60000) {
       return this._groupsCache;
     }
-    // Read directly from WhatsApp Web's in-memory store — much faster than getChats()
+    // Read directly from WhatsApp Web's in-memory store.
+    // After a fresh QR scan the store syncs asynchronously — wait up to 45s.
     const groups = await this._client.pupPage.evaluate(async () => {
       try {
-        // Wait up to 8s for the store to populate after fresh connect
-        for (let i = 0; i < 16; i++) {
+        // Phase 1: wait for the Store object itself to exist (up to 15s)
+        for (let i = 0; i < 30; i++) {
           const hasStore = window.Store?.Chat?.getModelsArray ||
-                           window.Store?.Chat?.models ||
-                           window.WWebJS?.getChats;
+                           window.Store?.Chat?.models;
           if (hasStore) break;
           await new Promise(r => setTimeout(r, 500));
         }
+        // Phase 2: wait for chats to actually populate (up to 30 more seconds)
         let models = [];
-        if (window.Store?.Chat?.getModelsArray) {
-          models = await window.Store.Chat.getModelsArray();
-        } else if (window.Store?.Chat?.models) {
-          models = Object.values(window.Store.Chat.models);
-        } else if (window.WWebJS?.getChats) {
-          models = await window.WWebJS.getChats();
-        }
-        // If store found but chats not yet loaded, wait a bit more
-        if (!models.length) {
-          await new Promise(r => setTimeout(r, 3000));
+        for (let i = 0; i < 60; i++) {
           if (window.Store?.Chat?.getModelsArray) {
             models = await window.Store.Chat.getModelsArray();
           } else if (window.Store?.Chat?.models) {
             models = Object.values(window.Store.Chat.models);
           }
+          if (models.length) break;
+          await new Promise(r => setTimeout(r, 500));
         }
         return models
           .filter(c => c.isGroup)
@@ -210,20 +204,10 @@ class WhatsAppService extends EventEmitter {
         return [];
       }
     });
-    // If store returned nothing, fall back to getChats() with a 60s timeout
     if (!groups.length) {
-      console.log('[WA] Store returned 0 groups, falling back to getChats()…');
-      const chats = await Promise.race([
-        this._client.getChats(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('getChats timed out after 60s')), 60000)),
-      ]);
-      const fallback = chats
-        .filter(c => c.isGroup)
-        .map(c => ({ id: c.id._serialized, name: c.name, members: c.participants?.length || 0 }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-      this._groupsCache   = fallback;
-      this._groupsCacheAt = now;
-      return fallback;
+      // Store still syncing — do NOT cache empty results so next request retries
+      console.log('[WA] Groups not ready yet (store still syncing), returning empty');
+      return [];
     }
     this._groupsCache   = groups;
     this._groupsCacheAt = now;
