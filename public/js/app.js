@@ -343,83 +343,101 @@ async function dashboard(el) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NEW COMPLAINT
+// NEW COMPLAINT — Bulk Queue
 // ═══════════════════════════════════════════════════════════════════════════════
+let _ncQueue    = [];   // [{ customer, description }]
+let _ncCustomer = null;
+
 function newComplaint(el) {
-  S.selectedCustomer = null;
+  _ncQueue    = [];
+  _ncCustomer = null;
+
   el.innerHTML = `
-    <div class="page-header">
+    <div class="page-header" style="margin-bottom:16px">
       <div>
-        <div class="page-header-title">Log New Complaint</div>
-        <div class="page-header-sub">Search by serial number or name — then fill complaint details</div>
+        <div class="page-header-title">Log Complaints</div>
+        <div class="page-header-sub">Add multiple, then submit all at once to WhatsApp</div>
       </div>
+      <span class="nc-queue-pill" id="ncPill" style="display:none">
+        <i data-lucide="layers"></i> <span id="ncPillCount">0</span> in queue
+      </span>
     </div>
 
-    <div class="lookup-wrap">
-      <!-- Step 1 -->
-      <div class="card" style="padding:22px">
-        <div class="step-label">Step 1 — Find Customer</div>
-        <div style="display:flex;gap:10px;align-items:flex-start">
-          <div class="lookup-search" id="lookupSearch" style="flex:1">
+    <div class="nc-layout">
+      <!-- Left: Search + Form -->
+      <div class="nc-left card">
+        <div class="nc-section-head"><i data-lucide="user-search"></i> Find Customer</div>
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <div class="lookup-search" id="lookupSearch" style="flex:1;position:relative">
             <i data-lucide="search" class="lookup-search-icon"></i>
             <input id="lookupInput" type="text" class="form-control lookup-input"
-              placeholder="Enter New Serial No., Old Serial No. or Party Name…" autocomplete="off"/>
+              placeholder="Serial No., Name or OSN…" autocomplete="off"/>
             <div class="lookup-spinner" id="lookupSpinner"></div>
             <div class="lookup-results" id="lookupResults"></div>
           </div>
-          <button class="btn btn-secondary" style="flex-shrink:0;height:46px" title="Add new customer" onclick="openCustomerForm()">
-            <i data-lucide="user-plus"></i> New Party
+          <button class="btn btn-secondary" style="flex-shrink:0;height:42px" onclick="openCustomerForm()" title="Add new party">
+            <i data-lucide="user-plus"></i>
           </button>
         </div>
+
         <div class="customer-card" id="customerCard"></div>
-      </div>
 
-      <!-- Step 2 -->
-      <div class="complaint-form-section card" style="padding:22px" id="complaintFormSection">
-        <div class="step-label">Step 2 — Complaint Description</div>
-        <form id="complaintForm" style="display:flex;flex-direction:column;gap:16px;margin-top:14px">
-          <div class="form-group">
-            <label class="form-label">Describe the Complaint <span class="req">*</span></label>
-            <textarea class="form-control" name="remarks" rows="5" required
-              placeholder="Describe the issue in detail — what happened, when it started, what was tried…"
-              style="resize:vertical;min-height:120px;font-size:14px"></textarea>
-          </div>
-          <button type="submit" class="btn btn-primary btn-lg" style="width:100%;justify-content:center;margin-top:4px">
-            <i data-lucide="send"></i> Submit Complaint
+        <div class="nc-complaint-area" id="ncComplaintArea" style="display:none">
+          <div class="nc-section-head" style="margin-top:16px"><i data-lucide="message-square"></i> Complaint</div>
+          <textarea class="form-control nc-textarea" id="ncRemarks" rows="3"
+            placeholder="Describe the issue… (Ctrl+Enter to add)"></textarea>
+          <button class="btn btn-primary nc-add-btn" id="ncAddBtn">
+            <i data-lucide="plus-circle"></i> Add to Queue
           </button>
-        </form>
+        </div>
       </div>
 
-      <!-- Step 3: Success -->
-      <div class="card success-overlay" id="successOverlay" style="padding:28px">
-        <div class="success-checkmark"><i data-lucide="check"></i></div>
-        <div class="success-cno" id="successCno"></div>
-        <div class="success-label">Complaint logged successfully</div>
-        <div style="text-align:left">
-          <div style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px;text-align:center">
-            Engineer Notification Message
+      <!-- Right: Queue -->
+      <div class="nc-right card">
+        <div class="nc-queue-hdr">
+          <div class="nc-queue-title"><i data-lucide="layers"></i> Queue</div>
+          <span class="badge badge-info nc-queue-count" id="ncQueueCount">0</span>
+        </div>
+
+        <div class="nc-queue-body" id="ncQueueBody">
+          <div class="nc-queue-empty">
+            <i data-lucide="inbox"></i>
+            <p>Find a customer, write the complaint,<br>then click <b>Add to Queue</b></p>
           </div>
-          <div class="msg-box" id="notifMsg"></div>
-          <div class="copy-btn-row">
-            <button class="btn btn-success" id="sendWaBtn" style="display:none">
-              <i data-lucide="send"></i> Send to WhatsApp Group
-            </button>
-            <button class="btn btn-secondary" id="copyMsgBtn">
-              <i data-lucide="copy"></i> Copy Message
-            </button>
-            <button class="btn btn-secondary" onclick="navigate('new-complaint')">
-              <i data-lucide="plus"></i> Log Another
-            </button>
-            <button class="btn btn-ghost" onclick="navigate('complaints')">
-              <i data-lucide="list"></i> View All
-            </button>
+        </div>
+
+        <div class="nc-queue-actions" id="ncQueueActions" style="display:none">
+          <button class="btn btn-success" id="ncSubmitBtn">
+            <i data-lucide="send"></i> <span id="ncSubmitLabel">Submit &amp; Send to WhatsApp</span>
+          </button>
+          <button class="btn btn-secondary" id="ncCopyAllBtn" style="display:none">
+            <i data-lucide="copy"></i> Copy Combined Message
+          </button>
+        </div>
+
+        <!-- Success State -->
+        <div class="nc-success" id="ncSuccess" style="display:none">
+          <div class="nc-success-icon"><i data-lucide="check-circle-2"></i></div>
+          <div class="nc-success-title" id="ncSuccessTitle">Complaints Logged!</div>
+          <div class="nc-success-cmps" id="ncSuccessCmps"></div>
+          <div class="nc-section-head" style="margin:14px 0 6px;width:100%">
+            <i data-lucide="message-circle"></i> Combined Message
           </div>
-          <div id="waTargetInfo" style="margin-top:10px;text-align:center;font-size:12px;color:var(--text-muted)"></div>
+          <div class="nc-success-msg-wrap" id="ncSuccessMsg"></div>
+          <div class="nc-success-btns" id="ncSuccessBtns"></div>
         </div>
       </div>
     </div>`;
+
   lucide.createIcons({ nodes: [el] });
   initLookup();
+
+  document.getElementById('ncAddBtn').addEventListener('click', _ncAddToQueue);
+  document.getElementById('ncRemarks').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); _ncAddToQueue(); }
+  });
+  document.getElementById('ncSubmitBtn').addEventListener('click', _ncSubmitAll);
+  _ncRefreshSubmitBtn();
 }
 
 function initLookup() {
@@ -469,9 +487,9 @@ function initLookup() {
 
 function selectCustomer(c) {
   if (!c) return;
-  S.selectedCustomer = c;
+  _ncCustomer = c;
   document.getElementById('lookupResults').style.display = 'none';
-  document.getElementById('lookupInput').value = `${c.new_party_name || c.party_name}  (NSN: ${c.nsn})`;
+  document.getElementById('lookupInput').value = `${c.new_party_name || c.party_name} (NSN: ${c.nsn})`;
 
   const card = document.getElementById('customerCard');
   card.innerHTML = `
@@ -491,100 +509,201 @@ function selectCustomer(c) {
       <div class="cc-field"><span class="cc-field-label">Contact</span><span class="cc-field-value">${esc(c.contact_no||'—')}</span></div>
       <div class="cc-field"><span class="cc-field-label">Area</span><span class="cc-field-value">${esc(c.area||'—')}</span></div>
       <div class="cc-field" style="grid-column:1/-1"><span class="cc-field-label">Address</span><span class="cc-field-value">${esc(c.address||'—')}</span></div>
-      <div class="cc-field"><span class="cc-field-label">Install Date</span><span class="cc-field-value">${fmtDate(c.install_date)}</span></div>
-      <div class="cc-field"><span class="cc-field-label">Warranty</span><span class="cc-field-value">${warrantyBadge(c.install_date)}</span></div>
     </div>`;
   card.classList.add('visible');
   lucide.createIcons({ nodes: [card] });
-  document.getElementById('complaintFormSection').classList.add('visible');
 
-  document.getElementById('complaintForm').onsubmit = async e => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const description = (fd.get('remarks') || '').trim();
-    if (!description) { toast('Please describe the complaint', 'warning'); return; }
-    const payload = {
-      customer_id:    c.id,
-      complaint_type: 'General',
-      remarks:        description,
-      priority:       'Normal',
-      engineer_id:    null,
-    };
-    const btn = e.target.querySelector('[type=submit]');
-    btn.disabled = true;
-    btn.innerHTML = '<i data-lucide="loader"></i> Submitting…';
-    lucide.createIcons({ nodes: [btn] });
-    try {
-      const { data } = await API.post('/api/complaints', payload);
-      showComplaintSuccess(data);
-      await preload();
-    } catch(err) {
-      toast(err.message, 'danger');
-      btn.disabled = false;
-      btn.innerHTML = '<i data-lucide="send"></i> Submit Complaint';
-      lucide.createIcons({ nodes: [btn] });
-    }
-  };
+  const area = document.getElementById('ncComplaintArea');
+  if (area) { area.style.display = ''; setTimeout(() => document.getElementById('ncRemarks')?.focus(), 50); }
 }
 
 window.clearSelection = () => {
-  S.selectedCustomer = null;
-  document.getElementById('customerCard').classList.remove('visible');
-  document.getElementById('complaintFormSection').classList.remove('visible');
-  document.getElementById('lookupInput').value = '';
-  document.getElementById('lookupInput').focus();
+  _ncCustomer = null;
+  const card = document.getElementById('customerCard');
+  if (card) card.classList.remove('visible');
+  const area = document.getElementById('ncComplaintArea');
+  if (area) area.style.display = 'none';
+  const input = document.getElementById('lookupInput');
+  if (input) { input.value = ''; input.focus(); }
 };
 
-function showComplaintSuccess(c) {
-  document.getElementById('complaintFormSection').classList.remove('visible');
-  const overlay = document.getElementById('successOverlay');
-  overlay.classList.add('visible');
-  document.getElementById('successCno').textContent = c.complaint_no;
-
-
-  const msg = [
-    `*Serial No:* ${c.nsn}`,
-    `*Address:* ${c.address || '—'}`,
-    `*Complain:* ${c.remarks || '—'}`,
-  ].join('\n');
-
-  document.getElementById('notifMsg').textContent = msg;
-  lucide.createIcons({ nodes: [overlay] });
-
-  document.getElementById('copyMsgBtn').onclick = () =>
-    navigator.clipboard.writeText(msg).then(() => toast('Message copied!', 'success'));
-
-  const sendBtn    = document.getElementById('sendWaBtn');
-  const targetInfo = document.getElementById('waTargetInfo');
-  let _waSent = false; // prevent double-click double-send
+// ── Queue helpers ─────────────────────────────────────────────────────────────
+function _ncRefreshSubmitBtn() {
+  const btn  = document.getElementById('ncSubmitBtn');
+  const copy = document.getElementById('ncCopyAllBtn');
+  if (!btn) return;
   if (WA.status === 'ready' && WA.target_id) {
-    sendBtn.style.display = '';
-    targetInfo.textContent = `→ ${WA.target_name || 'group'}`;
-    sendBtn.onclick = async () => {
-      if (_waSent) return;
-      _waSent = true;
-      sendBtn.disabled = true;
-      sendBtn.innerHTML = '<i data-lucide="loader"></i> Sending…';
-      lucide.createIcons({ nodes: [sendBtn] });
+    document.getElementById('ncSubmitLabel').textContent = `Submit & Send to ${WA.target_name || 'WhatsApp'}`;
+    copy && (copy.style.display = 'none');
+  } else {
+    document.getElementById('ncSubmitLabel').textContent = 'Submit Complaints';
+    copy && (copy.style.display = '');
+    copy && (copy.onclick = _ncCopyAll);
+  }
+}
+
+function _ncAddToQueue() {
+  if (!_ncCustomer) { toast('Select a customer first', 'warning'); return; }
+  const remarks = (document.getElementById('ncRemarks')?.value || '').trim();
+  if (!remarks) { toast('Please describe the complaint', 'warning'); document.getElementById('ncRemarks')?.focus(); return; }
+
+  _ncQueue.push({ customer: { ..._ncCustomer }, description: remarks });
+  _ncRenderQueue();
+
+  // Clear for next entry
+  document.getElementById('ncRemarks').value = '';
+  clearSelection();
+  toast(`Added (${_ncQueue.length} in queue)`, 'success');
+}
+
+function _ncRenderQueue() {
+  const body    = document.getElementById('ncQueueBody');
+  const actions = document.getElementById('ncQueueActions');
+  const count   = document.getElementById('ncQueueCount');
+  const pill    = document.getElementById('ncPill');
+  if (!body) return;
+
+  const n = _ncQueue.length;
+  if (count) count.textContent = n;
+  if (pill)  pill.style.display = n ? '' : 'none';
+  if (document.getElementById('ncPillCount')) document.getElementById('ncPillCount').textContent = n;
+
+  if (!n) {
+    body.innerHTML = `<div class="nc-queue-empty">
+      <i data-lucide="inbox"></i>
+      <p>Find a customer, write the complaint,<br>then click <b>Add to Queue</b></p>
+    </div>`;
+    if (actions) actions.style.display = 'none';
+    lucide.createIcons({ nodes: [body] });
+    return;
+  }
+
+  body.innerHTML = _ncQueue.map((item, i) => `
+    <div class="nc-qi">
+      <div class="nc-qi-num">${i + 1}</div>
+      <div class="nc-qi-body">
+        <div class="nc-qi-name">${esc(item.customer.new_party_name || item.customer.party_name)}</div>
+        <div class="nc-qi-meta">NSN: <b>${item.customer.nsn}</b>${item.customer.area ? ' · ' + esc(item.customer.area) : ''}</div>
+        <div class="nc-qi-desc">${esc(item.description)}</div>
+      </div>
+      <button class="nc-qi-remove" onclick="_ncRemove(${i})" title="Remove"><i data-lucide="x"></i></button>
+    </div>`).join('');
+
+  if (actions) actions.style.display = '';
+  _ncRefreshSubmitBtn();
+  lucide.createIcons({ nodes: [body] });
+}
+
+window._ncRemove = (idx) => { _ncQueue.splice(idx, 1); _ncRenderQueue(); };
+
+function _ncCopyAll() {
+  const msg = _ncBuildMsg(_ncQueue.map(q => ({
+    nsn: q.customer.nsn, new_party_name: q.customer.new_party_name,
+    address: q.customer.address, remarks: q.description, complaint_no: '(pending)',
+  })));
+  navigator.clipboard.writeText(msg).then(() => toast('Copied!', 'success'));
+}
+
+function _ncBuildMsg(results) {
+  const now = new Date();
+  const timeStr = now.toLocaleString('en-IN', {
+    day:'2-digit', month:'short', year:'numeric',
+    hour:'2-digit', minute:'2-digit', hour12:true,
+  });
+  const lines = [`*Complaints — ${timeStr}*`, ''];
+  results.forEach((r, i) => {
+    lines.push(`*${i + 1}. NSN ${r.nsn} — ${r.new_party_name || ''}*`);
+    if (r.address) lines.push(`*Address:* ${r.address}`);
+    lines.push(`*Complaint:* ${r.remarks || '—'}`);
+    if (r.complaint_no && r.complaint_no !== '(pending)') lines.push(`*Ref:* ${r.complaint_no}`);
+    if (i < results.length - 1) lines.push('');
+  });
+  return lines.join('\n');
+}
+
+async function _ncSubmitAll() {
+  if (!_ncQueue.length) { toast('Queue is empty — add at least one complaint', 'warning'); return; }
+  const btn = document.getElementById('ncSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i data-lucide="loader"></i> Submitting…';
+  lucide.createIcons({ nodes: [btn] });
+
+  try {
+    const { data: results } = await API.post('/api/complaints/bulk', {
+      complaints: _ncQueue.map(q => ({ customer_id: q.customer.id, remarks: q.description })),
+    });
+    await preload();
+    _ncShowSuccess(results);
+  } catch(err) {
+    toast(err.message, 'danger');
+    btn.disabled = false;
+    _ncRefreshSubmitBtn();
+    lucide.createIcons({ nodes: [btn] });
+  }
+}
+
+function _ncShowSuccess(results) {
+  // Hide queue, show success panel
+  const qBody   = document.getElementById('ncQueueBody');
+  const qAct    = document.getElementById('ncQueueActions');
+  const success = document.getElementById('ncSuccess');
+  if (!success) return;
+  if (qBody)  qBody.style.display   = 'none';
+  if (qAct)   qAct.style.display    = 'none';
+  success.style.display = '';
+
+  document.getElementById('ncSuccessTitle').textContent =
+    `${results.length} Complaint${results.length !== 1 ? 's' : ''} Logged!`;
+
+  document.getElementById('ncSuccessCmps').innerHTML =
+    results.map(r => `<span class="mono-tag" style="font-size:13px;font-weight:700">${esc(r.complaint_no)}</span>`).join('');
+
+  const msg = _ncBuildMsg(results);
+  document.getElementById('ncSuccessMsg').textContent = msg;
+
+  // Build action buttons
+  const btnsEl = document.getElementById('ncSuccessBtns');
+  const waReady = WA.status === 'ready' && WA.target_id;
+  let sent = false;
+
+  btnsEl.innerHTML = `
+    ${waReady ? `<button class="btn btn-success" id="ncSentBtn"><i data-lucide="send"></i> Send to WhatsApp</button>` : ''}
+    <button class="btn btn-secondary" id="ncCopyFinalBtn"><i data-lucide="copy"></i> Copy Message</button>
+    <button class="btn btn-primary" onclick="navigate('new-complaint')"><i data-lucide="plus"></i> Log More</button>
+    <button class="btn btn-ghost" onclick="navigate('complaints')"><i data-lucide="list"></i> View All</button>`;
+  lucide.createIcons({ nodes: [btnsEl] });
+
+  document.getElementById('ncCopyFinalBtn').onclick = () =>
+    navigator.clipboard.writeText(msg).then(() => toast('Copied!', 'success'));
+
+  if (waReady) {
+    document.getElementById('ncSentBtn').onclick = async () => {
+      if (sent) return;
+      sent = true;
+      const b = document.getElementById('ncSentBtn');
+      b.disabled = true;
+      b.innerHTML = '<i data-lucide="loader"></i> Sending…';
+      lucide.createIcons({ nodes: [b] });
       try {
         await API.post('/api/whatsapp/send', { chat_id: WA.target_id, message: msg });
-        sendBtn.innerHTML = '<i data-lucide="check-circle"></i> Sent!';
-        lucide.createIcons({ nodes: [sendBtn] });
+        b.innerHTML = '<i data-lucide="check-circle"></i> Sent to ' + esc(WA.target_name || 'group') + '!';
+        lucide.createIcons({ nodes: [b] });
         toast('Sent to WhatsApp group!', 'success');
-      } catch(err) {
-        _waSent = false;
-        toast(err.message, 'danger');
-        sendBtn.disabled = false;
-        sendBtn.innerHTML = '<i data-lucide="send"></i> Send to WhatsApp Group';
-        lucide.createIcons({ nodes: [sendBtn] });
+      } catch(e) {
+        sent = false; b.disabled = false;
+        b.innerHTML = '<i data-lucide="send"></i> Send to WhatsApp';
+        lucide.createIcons({ nodes: [b] });
+        toast(e.message, 'danger');
       }
     };
-  } else {
-    sendBtn.style.display = 'none';
-    targetInfo.innerHTML = WA.status !== 'ready'
-      ? `<a href="#" onclick="navigate('whatsapp')" style="color:var(--primary)">Connect WhatsApp</a> to enable`
-      : `<a href="#" onclick="navigate('whatsapp')" style="color:var(--primary)">Set a group</a> to enable`;
+    // Auto-send
+    document.getElementById('ncSentBtn').click();
   }
+
+  lucide.createIcons({ nodes: [success] });
+  _ncQueue = [];
+  const pill = document.getElementById('ncPill');
+  if (pill) pill.style.display = 'none';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1786,11 +1905,12 @@ let _rptCustomer = null; // selected customer object
 
 async function reportsPage(el) {
   _rptCustomer = null;
+
   el.innerHTML = `
     <div class="page-header">
       <div>
         <div class="page-header-title">Reports</div>
-        <div class="page-header-sub">Customer complaint history &amp; date-wise reports</div>
+        <div class="page-header-sub">Filter by customer, area, date range or engineer</div>
       </div>
       <a class="btn btn-secondary" id="rptExportBtn" href="#" style="pointer-events:none;opacity:.4">
         <i data-lucide="file-up"></i> Export XLSX
@@ -1798,23 +1918,21 @@ async function reportsPage(el) {
     </div>
 
     <div class="card rpt-filter-card">
-      <div class="card-body">
+      <div class="card-body" style="padding:16px 20px">
         <div class="rpt-filter-grid">
 
-          <!-- Customer autocomplete -->
-          <div class="form-group rpt-customer-wrap" style="margin:0;position:relative">
-            <label class="form-label">Customer <span style="font-size:11px;color:var(--text-muted)">(type name or NSN)</span></label>
+          <!-- Customer -->
+          <div class="form-group" style="margin:0;position:relative">
+            <label class="form-label">Customer</label>
             <div class="rpt-ac-box">
               <i data-lucide="search" class="rpt-ac-icon"></i>
               <input class="form-control rpt-ac-input" id="rptCustInput"
-                placeholder="Search customer name or serial no…"
-                autocomplete="off" />
+                placeholder="Name or serial no…" autocomplete="off"/>
               <button class="rpt-ac-clear" id="rptCustClear" style="display:none" title="Clear">
                 <i data-lucide="x"></i>
               </button>
             </div>
             <div class="rpt-ac-dropdown" id="rptCustDropdown"></div>
-            <div id="rptCustChip" style="display:none;margin-top:8px"></div>
           </div>
 
           <!-- Status -->
@@ -1826,40 +1944,55 @@ async function reportsPage(el) {
             </select>
           </div>
 
+          <!-- Area -->
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Area</label>
+            <select class="form-control" id="rptArea">
+              <option value="">All Areas</option>
+              ${(S.areas||[]).map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join('')}
+            </select>
+          </div>
+
           <!-- Quick range -->
           <div class="form-group" style="margin:0">
-            <label class="form-label">Quick Range</label>
+            <label class="form-label">Date Range</label>
             <select class="form-control" id="rptRange">
               <option value="">All Time</option>
               <option value="today">Today</option>
               <option value="yesterday">Yesterday</option>
               <option value="week">This Week</option>
               <option value="month">This Month</option>
-              <option value="custom">Custom Range</option>
+              <option value="custom">Custom Range…</option>
             </select>
           </div>
 
-          <!-- Custom dates (shown only when custom selected) -->
-          <div class="form-group rpt-custom-date" id="rptFromWrap" style="margin:0;display:none">
-            <label class="form-label">From Date</label>
-            <input class="form-control" id="rptFrom" type="date" />
+          <!-- From / To (custom) -->
+          <div class="form-group" id="rptFromWrap" style="margin:0;display:none">
+            <label class="form-label">From</label>
+            <input class="form-control" id="rptFrom" type="date"/>
           </div>
-          <div class="form-group rpt-custom-date" id="rptToWrap" style="margin:0;display:none">
-            <label class="form-label">To Date</label>
-            <input class="form-control" id="rptTo" type="date" />
+          <div class="form-group" id="rptToWrap" style="margin:0;display:none">
+            <label class="form-label">To</label>
+            <input class="form-control" id="rptTo" type="date"/>
           </div>
 
-          <!-- Generate button -->
-          <div style="display:flex;align-items:flex-end">
-            <button class="btn btn-primary rpt-gen-btn" id="rptSearchBtn">
-              <i data-lucide="bar-chart-2"></i> Generate Report
+          <!-- Generate -->
+          <div style="display:flex;align-items:flex-end;gap:8px" class="rpt-filter-actions">
+            <button class="btn btn-primary" id="rptSearchBtn" style="white-space:nowrap">
+              <i data-lucide="bar-chart-2"></i> Generate
+            </button>
+            <button class="btn btn-secondary" id="rptClearBtn" style="white-space:nowrap">
+              <i data-lucide="x"></i> Clear
             </button>
           </div>
         </div>
+
+        <!-- Selected customer chip -->
+        <div id="rptCustChip" style="display:none;margin-top:10px"></div>
       </div>
     </div>
 
-    <div id="rptResults" style="margin-top:20px"></div>`;
+    <div id="rptResults" style="margin-top:16px"></div>`;
 
   lucide.createIcons({ nodes: [el] });
 
@@ -1876,11 +2009,11 @@ async function reportsPage(el) {
     const fmt = d => d.toISOString().slice(0,10);
     switch (rangeSelect.value) {
       case 'today':     return { from: fmt(today), to: fmt(today) };
-      case 'yesterday': { const y = new Date(today); y.setDate(y.getDate()-1); return { from: fmt(y), to: fmt(y) }; }
-      case 'week':      { const w = new Date(today); w.setDate(w.getDate()-6); return { from: fmt(w), to: fmt(today) }; }
+      case 'yesterday': { const y = new Date(today); y.setDate(y.getDate()-1); return { from:fmt(y), to:fmt(y) }; }
+      case 'week':      { const w = new Date(today); w.setDate(w.getDate()-6); return { from:fmt(w), to:fmt(today) }; }
       case 'month':     return { from: fmt(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmt(today) };
       case 'custom':    return { from: document.getElementById('rptFrom').value, to: document.getElementById('rptTo').value };
-      default:          return { from: '', to: '' };
+      default:          return { from:'', to:'' };
     }
   };
 
@@ -1890,61 +2023,62 @@ async function reportsPage(el) {
   const custClear    = document.getElementById('rptCustClear');
   const custChip     = document.getElementById('rptCustChip');
 
-  const selectCustomer = (c) => {
+  const rptSelectCustomer = (c) => {
     _rptCustomer = c;
     custInput.value = `${c.new_party_name} — NSN ${c.nsn}`;
-    custDropdown.innerHTML = '';
-    custDropdown.style.display = 'none';
+    custDropdown.innerHTML = ''; custDropdown.style.display = 'none';
     custClear.style.display = '';
     custChip.style.display = '';
     custChip.innerHTML = `
       <div class="rpt-cust-chip">
         <i data-lucide="user-check"></i>
-        <span><b>${esc(c.new_party_name)}</b> &nbsp;·&nbsp; NSN: ${c.nsn} &nbsp;·&nbsp; ${esc(c.area||'—')}</span>
+        <span><b>${esc(c.new_party_name)}</b> · NSN: ${c.nsn}${c.area ? ' · '+esc(c.area) : ''}</span>
       </div>`;
     lucide.createIcons({ nodes: [custChip] });
   };
 
-  const clearCustomer = () => {
+  const rptClearCustomer = () => {
     _rptCustomer = null;
     custInput.value = '';
     custClear.style.display = 'none';
     custChip.style.display = 'none';
-    custChip.innerHTML = '';
     custDropdown.style.display = 'none';
   };
 
-  custClear.addEventListener('click', () => { clearCustomer(); custInput.focus(); });
+  custClear.addEventListener('click', () => { rptClearCustomer(); custInput.focus(); });
 
-  const searchCustomers = debounce(async (q) => {
-    if (!q || q.length < 1) { custDropdown.style.display = 'none'; return; }
+  const searchRptCustomers = debounce(async (q) => {
+    if (!q) { custDropdown.style.display = 'none'; return; }
     try {
       const { data } = await API.get(`/api/customers?search=${encodeURIComponent(q)}&limit=8`);
-      if (!data.length) {
-        custDropdown.innerHTML = `<div class="rpt-ac-empty">No customers found</div>`;
-      } else {
-        custDropdown.innerHTML = data.map(c => `
-          <div class="rpt-ac-item" data-id="${c.id}">
-            <div class="rpt-ac-name">${esc(c.new_party_name)}</div>
-            <div class="rpt-ac-meta">NSN: ${c.nsn} &nbsp;·&nbsp; ${esc(c.area||'—')} &nbsp;·&nbsp; ${esc(c.contact_no||'')}</div>
-          </div>`).join('');
-        custDropdown.querySelectorAll('.rpt-ac-item').forEach((item, i) => {
-          item.addEventListener('click', () => selectCustomer(data[i]));
-        });
-      }
+      custDropdown.innerHTML = data.length
+        ? data.map((c,i) => `
+            <div class="rpt-ac-item" data-i="${i}">
+              <div class="rpt-ac-name">${esc(c.new_party_name)}</div>
+              <div class="rpt-ac-meta">NSN: ${c.nsn} · ${esc(c.area||'—')}</div>
+            </div>`).join('')
+        : `<div class="rpt-ac-empty">No customers found</div>`;
+      custDropdown.querySelectorAll('.rpt-ac-item').forEach(item =>
+        item.addEventListener('click', () => rptSelectCustomer(data[+item.dataset.i])));
       custDropdown.style.display = 'block';
     } catch(_) {}
   }, 250);
 
-  custInput.addEventListener('input', e => {
-    if (_rptCustomer) clearCustomer();
-    searchCustomers(e.target.value.trim());
-  });
-  custInput.addEventListener('blur', () => {
-    setTimeout(() => { custDropdown.style.display = 'none'; }, 200);
-  });
-  custInput.addEventListener('focus', e => {
-    if (e.target.value && !_rptCustomer) searchCustomers(e.target.value);
+  custInput.addEventListener('input',  e => { if (_rptCustomer) rptClearCustomer(); searchRptCustomers(e.target.value.trim()); });
+  custInput.addEventListener('blur',   ()  => setTimeout(() => { custDropdown.style.display = 'none'; }, 200));
+  custInput.addEventListener('focus',  e  => { if (e.target.value && !_rptCustomer) searchRptCustomers(e.target.value); });
+
+  // ── Clear all filters ─────────────────────────────────────────────────────────
+  document.getElementById('rptClearBtn').addEventListener('click', () => {
+    rptClearCustomer();
+    document.getElementById('rptStatus').value = '';
+    document.getElementById('rptArea').value   = '';
+    rangeSelect.value = '';
+    document.getElementById('rptFromWrap').style.display = 'none';
+    document.getElementById('rptToWrap').style.display   = 'none';
+    document.getElementById('rptResults').innerHTML = '';
+    const exportBtn = document.getElementById('rptExportBtn');
+    exportBtn.style.opacity = '.4'; exportBtn.style.pointerEvents = 'none'; exportBtn.href = '#';
   });
 
   // ── Generate ─────────────────────────────────────────────────────────────────
@@ -1956,6 +2090,7 @@ async function reportsPage(el) {
       nsn:       _rptCustomer ? _rptCustomer.nsn : '',
       search:    _rptCustomer ? '' : custInput.value.trim(),
       status:    document.getElementById('rptStatus').value,
+      area:      document.getElementById('rptArea').value,
       date_from: from, date_to: to,
     });
     try {
@@ -1966,8 +2101,7 @@ async function reportsPage(el) {
         exportBtn.style.opacity = '1'; exportBtn.style.pointerEvents = '';
         exportBtn.href = `/api/export/complaints?${p}`;
       } else {
-        exportBtn.style.opacity = '.4'; exportBtn.style.pointerEvents = 'none';
-        exportBtn.href = '#';
+        exportBtn.style.opacity = '.4'; exportBtn.style.pointerEvents = 'none'; exportBtn.href = '#';
       }
     } catch(e) {
       wrap.innerHTML = `<div class="empty-state"><p class="text-danger">${esc(e.message)}</p></div>`;
@@ -1984,17 +2118,15 @@ function renderReportResults(wrap, data, customer) {
       <div class="empty-state">
         <i data-lucide="file-search"></i>
         <h3>No complaints found</h3>
-        <p>Try changing the filters or selecting a different customer.</p>
+        <p>Try adjusting the filters or selecting a different customer.</p>
       </div>`;
     lucide.createIcons({ nodes: [wrap] }); return;
   }
 
-  // Summary stats
   const total    = data.length;
   const open     = data.filter(c => c.status === 'Open').length;
   const progress = data.filter(c => c.status === 'In Progress').length;
   const resolved = data.filter(c => c.status === 'Resolved' || c.status === 'Closed').length;
-
   const customerCard = customer ? `
     <div class="card rpt-cust-card">
       <div class="card-body rpt-cust-body">
@@ -2014,32 +2146,35 @@ function renderReportResults(wrap, data, customer) {
 
   wrap.innerHTML = `
     ${customerCard}
-    <div class="rpt-summary-row">
+    <div class="rpt-stats-bar">
       ${[
-        ['Total',       total,    'layers',       '#2563eb','#eff6ff'],
-        ['Open',        open,     'alert-circle', '#d97706','#fef3c7'],
-        ['In Progress', progress, 'clock',        '#7c3aed','#ede9fe'],
-        ['Resolved',    resolved, 'check-circle', '#059669','#d1fae5'],
-      ].map(([label, val, icon, color, bg]) => `
-        <div class="rpt-sum-card">
-          <div class="rpt-sum-icon" style="background:${bg};color:${color}"><i data-lucide="${icon}"></i></div>
-          <div class="rpt-sum-val">${val}</div>
-          <div class="rpt-sum-label">${label}</div>
+        { label: 'Total',       val: total,    icon: 'layers',       cls: 'blue'   },
+        { label: 'Open',        val: open,     icon: 'alert-circle', cls: 'amber'  },
+        { label: 'In Progress', val: progress, icon: 'clock',        cls: 'purple' },
+        { label: 'Resolved',    val: resolved, icon: 'check-circle', cls: 'green'  },
+      ].map(s => `
+        <div class="rpt-stat-card rpt-stat-${s.cls}">
+          <div class="rpt-stat-icon"><i data-lucide="${s.icon}"></i></div>
+          <div class="rpt-stat-val">${s.val}</div>
+          <div class="rpt-stat-label">${s.label}</div>
         </div>`).join('')}
     </div>
 
     <div class="card">
       <div class="card-header">
         <span class="card-title">Complaint History</span>
-        <span class="badge badge-info">${total} record${total!==1?'s':''}</span>
+        <span class="badge badge-info">${total} record${total !== 1 ? 's' : ''}</span>
       </div>
       <div class="table-wrapper">
         <table>
           <thead><tr>
-            <th>Complaint No</th>
-            ${!customer ? '<th>Customer</th><th>NSN</th>' : ''}
-            <th>Complain</th><th>Status</th>
-            <th>Logged On</th><th>Resolved On</th>
+            <th>Ref No</th>
+            ${!customer ? '<th>Customer</th>' : ''}
+            <th>Area</th>
+            <th>Complaint</th>
+            <th>Status</th>
+            <th>Logged On</th>
+            <th>Resolved On</th>
           </tr></thead>
           <tbody>
             ${data.map(c => `
@@ -2048,10 +2183,10 @@ function renderReportResults(wrap, data, customer) {
                 ${!customer ? `
                   <td>
                     <div class="fw-600">${esc(c.new_party_name)}</div>
-                    <div class="td-muted">${esc(c.area||'')}</div>
-                  </td>
-                  <td><span class="mono-tag">${c.nsn}</span></td>` : ''}
-                <td style="max-width:240px;white-space:normal;line-height:1.4">${esc(c.remarks||'—')}</td>
+                    <div class="td-muted">NSN: ${c.nsn}</div>
+                  </td>` : ''}
+                <td class="td-muted">${esc(c.area || '—')}</td>
+                <td style="max-width:220px;white-space:normal;line-height:1.4">${esc(c.remarks || '—')}</td>
                 <td>${statusBadge(c.status)}</td>
                 <td class="td-muted" style="white-space:nowrap">${fmtDateTime(c.created_at)}</td>
                 <td class="td-muted" style="white-space:nowrap">${c.resolved_at ? fmtDateTime(c.resolved_at) : '—'}</td>

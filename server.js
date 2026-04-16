@@ -400,6 +400,39 @@ app.post('/api/complaints', (req, res) => {
   } catch(e) { fail(res, e.message, 500); }
 });
 
+// Bulk create complaints (one DB transaction, returns all created rows)
+app.post('/api/complaints/bulk', (req, res) => {
+  try {
+    const { complaints } = req.body;
+    if (!Array.isArray(complaints) || !complaints.length)
+      return fail(res, 'complaints array is required');
+
+    const rows = [];
+    for (const item of complaints) {
+      const { customer_id, remarks } = item;
+      if (!customer_id) continue;
+      if (!get(`SELECT id FROM customers WHERE id=?`, customer_id)) continue;
+
+      const complaint_no = nextComplaintNo();
+      const result = run(`
+        INSERT INTO complaints (complaint_no, customer_id, complaint_type, remarks, priority)
+        VALUES (?,?,?,?,?)
+      `, complaint_no, customer_id, 'General', remarks || null, 'Normal');
+
+      const row = get(`
+        SELECT c.*, cu.nsn, cu.osn, cu.new_party_name, cu.contact_no, cu.address, cu.area
+        FROM complaints c JOIN customers cu ON c.customer_id=cu.id
+        WHERE c.id=?
+      `, result.lastInsertRowid);
+
+      logEvent('complaint-new', `Complaint ${row.complaint_no} logged — ${row.new_party_name}`);
+      rows.push(row);
+    }
+    scheduleSyncWrite();
+    ok(res, rows);
+  } catch(e) { fail(res, e.message, 500); }
+});
+
 app.put('/api/complaints/:id', (req, res) => {
   try {
     const existing = get(`SELECT * FROM complaints WHERE id=?`, req.params.id);
@@ -546,11 +579,12 @@ app.get('/api/complaints/stats', (_req, res) => {
 // ─── Reports ──────────────────────────────────────────────────────────────────
 app.get('/api/reports/complaints', (req, res) => {
   try {
-    const { search, nsn, date_from, date_to, status } = req.query;
+    const { search, nsn, date_from, date_to, status, area } = req.query;
     const conditions = [];
     const params = [];
     if (search)    { conditions.push(`(cu.new_party_name LIKE ? OR cu.party_name LIKE ?)`); params.push(`%${search}%`, `%${search}%`); }
     if (nsn)       { conditions.push(`cu.nsn = ?`);                                         params.push(nsn); }
+    if (area)      { conditions.push(`cu.area = ?`);                                        params.push(area); }
     if (date_from) { conditions.push(`DATE(c.created_at,'localtime') >= ?`);                params.push(date_from); }
     if (date_to)   { conditions.push(`DATE(c.created_at,'localtime') <= ?`);                params.push(date_to); }
     if (status)    { conditions.push(`c.status = ?`);                                       params.push(status); }
