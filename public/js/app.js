@@ -67,6 +67,15 @@ function connBadge(s) {
     ? `<span class="badge badge-success">ON</span>`
     : `<span class="badge badge-danger">OFF</span>`;
 }
+function typeChips(typeStr) {
+  if (!typeStr || typeStr === 'General') return `<span class="type-chip-general">General</span>`;
+  const types = typeStr.split(',').map(t => t.trim()).filter(Boolean);
+  if (!types.length) return '—';
+  const visible = types.slice(0, 2);
+  const extra   = types.length - 2;
+  return visible.map(t => `<span class="type-chip">${esc(t)}</span>`).join('')
+    + (extra > 0 ? `<span class="type-chip-more">+${extra}</span>` : '');
+}
 function warrantyBadge(installDate) {
   if (!installDate) return `<span class="badge badge-gray">No install date</span>`;
   const warrantyEnd = new Date(new Date(installDate).getTime() + 365 * 24 * 60 * 60 * 1000);
@@ -270,53 +279,56 @@ async function dashboard(el) {
   try {
     const { data } = await API.get('/api/dashboard/stats');
     const { stats, recent } = data;
+    const now = new Date();
+    const greet = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
+    const todayStr = now.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+
     el.innerHTML = `
-      <div class="page-header">
-        <div>
-          <div class="page-header-title">Dashboard</div>
-          <div class="page-header-sub">Overview of your complaint management system</div>
+      <div class="db-hero">
+        <div class="db-hero-text">
+          <div class="db-greet">${greet} 👋</div>
+          <div class="db-date">${todayStr}</div>
+          <div class="db-sub">Complaint management overview</div>
         </div>
-        <button class="btn btn-primary" onclick="navigate('new-complaint')">
-          <i data-lucide="plus"></i> New Complaint
+        <button class="btn btn-primary db-hero-btn" onclick="navigate('new-complaint')">
+          <i data-lucide="plus"></i> Log Complaint
         </button>
       </div>
 
-      <div class="stats-grid">
+      <div class="db-stats-grid">
         ${[
-          ['total_customers',   'Total Customers',   'users',          '#2563eb','#eff6ff'],
-          ['active_customers',  'Active (ON)',        'wifi',           '#059669','#d1fae5'],
-          ['inactive_customers','Inactive (OFF)',     'wifi-off',       '#dc2626','#fee2e2'],
-          ['open_complaints',   'Open Complaints',    'alert-circle',   '#d97706','#fef3c7'],
-          ['total_complaints',  'Total Complaints',   'clipboard-list', '#0369a1','#e0f2fe'],
-        ].map(([k, label, icon, color, bg]) => `
-          <div class="stat-card">
-            <div class="stat-icon" style="background:${bg};color:${color}">
-              <i data-lucide="${icon}"></i>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value" data-counter="${stats[k] ?? 0}">0</div>
-              <div class="stat-label">${label}</div>
+          { k:'total_customers',    label:'Total Customers',  icon:'users',          cls:'blue'   },
+          { k:'active_customers',   label:'Active (ON)',       icon:'wifi',           cls:'green'  },
+          { k:'inactive_customers', label:'Inactive (OFF)',    icon:'wifi-off',       cls:'red'    },
+          { k:'open_complaints',    label:'Open Complaints',   icon:'alert-circle',   cls:'amber'  },
+          { k:'total_complaints',   label:'Total Complaints',  icon:'clipboard-list', cls:'sky'    },
+        ].map(s => `
+          <div class="db-stat-card db-stat-${s.cls}">
+            <div class="db-stat-icon"><i data-lucide="${s.icon}"></i></div>
+            <div class="db-stat-body">
+              <div class="db-stat-val" data-counter="${stats[s.k] ?? 0}">0</div>
+              <div class="db-stat-lbl">${s.label}</div>
             </div>
           </div>`).join('')}
       </div>
 
-      <div class="card">
+      <div class="card db-recent-card">
         <div class="card-header">
           <span class="card-title">Recent Complaints</span>
           <button class="btn btn-sm btn-ghost" onclick="navigate('complaints')">
             View All <i data-lucide="arrow-right"></i>
           </button>
         </div>
+        ${!recent.length ? `
+          <div class="empty-state">
+            <i data-lucide="clipboard"></i>
+            <h3>No complaints yet</h3>
+            <p>Log your first complaint to get started.</p>
+          </div>` : `
         <div class="table-wrapper">
-          ${!recent.length ? `
-            <div class="empty-state">
-              <i data-lucide="clipboard"></i>
-              <h3>No complaints yet</h3>
-              <p>Log your first complaint to get started.</p>
-            </div>` : `
           <table>
             <thead><tr>
-              <th>No.</th><th>Customer</th><th>Complaint Type</th><th>Status</th><th>Date</th>
+              <th>Ref No</th><th>Customer</th><th>Complaint Types</th><th>Status</th><th>Date</th>
             </tr></thead>
             <tbody>
               ${recent.map(c => `
@@ -324,15 +336,15 @@ async function dashboard(el) {
                   <td><span class="mono-tag">${esc(c.complaint_no)}</span></td>
                   <td>
                     <div class="fw-600">${esc(c.new_party_name)}</div>
-                    <div class="td-muted">NSN: ${c.nsn}${c.area ? ' · ' + esc(c.area) : ''}</div>
+                    <div class="td-muted">SN: ${c.nsn}${c.area ? ' · ' + esc(c.area) : ''}</div>
                   </td>
-                  <td>${esc(c.complaint_type)}</td>
+                  <td>${typeChips(c.complaint_type)}</td>
                   <td>${statusBadge(c.status)}</td>
-                  <td class="td-muted">${fmtDate(c.created_at)}</td>
+                  <td class="td-muted" style="white-space:nowrap">${fmtDate(c.created_at)}</td>
                 </tr>`).join('')}
             </tbody>
-          </table>`}
-        </div>
+          </table>
+        </div>`}
       </div>`;
     lucide.createIcons({ nodes: [el] });
     el.querySelectorAll('[data-counter]').forEach(num =>
@@ -824,11 +836,11 @@ function _ncBuildMsg(results) {
     day:'2-digit', month:'short', year:'numeric',
     hour:'2-digit', minute:'2-digit', hour12:true,
   });
-  const lines = [`Complaints — ${timeStr}`, ''];
+  const lines = [`*Complaints — ${timeStr}*`, ''];
   results.forEach((r, i) => {
-    lines.push(`${i + 1}. SN ${r.nsn} — ${r.new_party_name || ''}`);
+    lines.push(`*${i + 1}. SN ${r.nsn} — ${r.new_party_name || ''}*`);
     if (r.address) lines.push(`Address: ${r.address}`);
-    if (r.types && r.types.length) lines.push(`Type: ${r.types.join(', ')}`);
+    if (r.types && r.types.length) lines.push(`Complaint Types: ${r.types.join(', ')}`);
     if (r.remarks) lines.push(`Note: ${r.remarks}`);
     if (i < results.length - 1) lines.push('');
   });
@@ -1277,47 +1289,51 @@ async function complaints(el) {
         <div class="page-header-sub">View and manage all complaints</div>
       </div>
       <div style="display:flex;gap:8px">
-        <a class="btn btn-secondary" href="/api/export/complaints" download title="Export to Excel">
-          <i data-lucide="file-up"></i> Export XLSX
+        <a class="btn btn-secondary" href="/api/export/complaints" download>
+          <i data-lucide="file-up"></i> Export
         </a>
         <button class="btn btn-primary" onclick="navigate('new-complaint')">
-          <i data-lucide="plus"></i> New Complaint
+          <i data-lucide="plus"></i> New
         </button>
       </div>
     </div>
-    <div class="period-stats-row" id="cmpPeriodStats">
+
+    <div class="cmp-period-row" id="cmpPeriodStats">
       <div class="page-loading" style="min-height:72px"><div class="spinner" style="width:24px;height:24px;border-width:2px"></div></div>
     </div>
 
-    <div class="card">
-      <div class="card-header" style="flex-wrap:wrap;gap:10px">
-        <div class="filter-bar" style="flex:1">
-          <div class="search-box" style="flex:1;min-width:200px">
-            <i data-lucide="search" class="search-icon"></i>
-            <input id="cmpSearch" type="text" class="form-control" placeholder="Search complaint no., customer…" value="${esc(S.complaints.search)}" />
-          </div>
-          <select class="form-control" id="cmpStatus" style="width:140px">
+    <div class="card cmp-filter-card">
+      <div class="cmp-filter-inner">
+        <div class="cmp-search-wrap">
+          <i data-lucide="search" class="cmp-search-icon"></i>
+          <input id="cmpSearch" type="text" class="form-control cmp-search-input"
+            placeholder="Search ref no., customer name…" value="${esc(S.complaints.search)}" />
+        </div>
+        <div class="cmp-filter-selects">
+          <select class="form-control" id="cmpStatus">
             <option value="">All Status</option>
             ${['Open','In Progress','Resolved','Closed'].map(s =>
               `<option value="${s}"${S.complaints.status===s?' selected':''}>${s}</option>`).join('')}
           </select>
-          <select class="form-control" id="cmpEngineer" style="width:150px">
+          <select class="form-control" id="cmpEngineer">
             <option value="">All Engineers</option>
             ${S.engineers.map(e=>`<option value="${e.id}"${S.complaints.engineer_id==e.id?' selected':''}>${esc(e.name)}</option>`).join('')}
           </select>
-          <input type="date" class="form-control" id="cmpFrom" style="width:140px" value="${S.complaints.date_from}" title="From date" />
-          <input type="date" class="form-control" id="cmpTo"   style="width:140px" value="${S.complaints.date_to}"   title="To date" />
+          <input type="date" class="form-control" id="cmpFrom" value="${S.complaints.date_from}" title="From date" />
+          <input type="date" class="form-control" id="cmpTo"   value="${S.complaints.date_to}"   title="To date" />
         </div>
       </div>
-      <div id="cmpBulkBar" style="display:none;padding:10px 16px;background:var(--primary-light);border-bottom:1px solid var(--primary-border);align-items:center;gap:12px">
-        <span id="cmpBulkCount" style="font-size:13px;font-weight:600;color:var(--primary)"></span>
+      <div id="cmpBulkBar" class="cmp-bulk-bar" style="display:none">
+        <i data-lucide="check-square" style="color:var(--primary)"></i>
+        <span id="cmpBulkCount" class="cmp-bulk-count"></span>
         <button class="btn btn-sm btn-danger" id="cmpBulkDeleteBtn">
-          <i data-lucide="trash-2"></i> Delete Selected
+          <i data-lucide="trash-2"></i> Delete
         </button>
-        <button class="btn btn-sm btn-secondary" id="cmpBulkClearBtn">Clear Selection</button>
+        <button class="btn btn-sm btn-ghost" id="cmpBulkClearBtn">Clear</button>
       </div>
-      <div id="cmpTableWrap"><div class="page-loading"><div class="spinner"></div></div></div>
-    </div>`;
+    </div>
+
+    <div id="cmpTableWrap"><div class="page-loading"><div class="spinner"></div></div></div>`;
   lucide.createIcons({ nodes: [el] });
 
   const load = async () => {
@@ -1350,16 +1366,16 @@ async function complaints(el) {
     const ps = document.getElementById('cmpPeriodStats');
     if (!ps) return;
     ps.innerHTML = [
-      ['today',      "Today",       'calendar-check',  '#7c3aed','#ede9fe'],
-      ['yesterday',  "Yesterday",   'calendar-minus',  '#0369a1','#e0f2fe'],
-      ['this_month', "This Month",  'calendar',        '#059669','#d1fae5'],
-      ['total',      "Total",       'layers',          '#d97706','#fef3c7'],
-    ].map(([k, label, icon, color, bg]) => `
-      <div class="period-stat-card">
-        <div class="ps-icon" style="background:${bg};color:${color}"><i data-lucide="${icon}"></i></div>
-        <div class="ps-body">
-          <div class="ps-value" data-counter="${s[k] ?? 0}">0</div>
-          <div class="ps-label">${label}</div>
+      { k:'today',      label:'Today',       icon:'calendar-check', cls:'purple' },
+      { k:'yesterday',  label:'Yesterday',   icon:'calendar-minus', cls:'sky'    },
+      { k:'this_month', label:'This Month',  icon:'calendar',       cls:'green'  },
+      { k:'total',      label:'Total',       icon:'layers',         cls:'amber'  },
+    ].map(c => `
+      <div class="cmp-ps-card cmp-ps-${c.cls}">
+        <div class="cmp-ps-icon"><i data-lucide="${c.icon}"></i></div>
+        <div class="cmp-ps-body">
+          <div class="cmp-ps-val" data-counter="${s[c.k] ?? 0}">0</div>
+          <div class="cmp-ps-lbl">${c.label}</div>
         </div>
       </div>`).join('');
     lucide.createIcons({ nodes: [ps] });
@@ -1376,38 +1392,40 @@ function renderComplaintTable(wrap, data, total) {
     lucide.createIcons({ nodes: [wrap] }); return;
   }
   wrap.innerHTML = `
-    <div class="table-wrapper">
-      <table>
-        <thead><tr>
-          <th style="width:36px"><input type="checkbox" id="cmpSelectAll" title="Select all" /></th>
-          <th>Complaint No</th><th>Customer</th><th>Type</th>
-          <th>Engineer</th><th>Priority</th><th>Status</th><th>Date</th><th>Actions</th>
-        </tr></thead>
-        <tbody>
-          ${data.map(c => `
-            <tr>
-              <td><input type="checkbox" class="cmp-chk" value="${c.id}" /></td>
-              <td><span class="mono-tag row-link" onclick="openComplaintDetail(${c.id})">${esc(c.complaint_no)}</span></td>
-              <td>
-                <div class="fw-600">${esc(c.new_party_name)}</div>
-                <div class="td-muted">NSN: ${c.nsn} · ${esc(c.area||'')}</div>
-              </td>
-              <td>${esc(c.complaint_type)}</td>
-              <td>${esc(c.engineer_name||'—')}</td>
-              <td>${priorityBadge(c.priority)}</td>
-              <td>${statusBadge(c.status)}</td>
-              <td class="td-muted">${fmtDateTime(c.created_at)}</td>
-              <td>
-                <div class="gap-10">
-                  <button class="btn btn-sm btn-ghost" title="View" onclick="openComplaintDetail(${c.id})"><i data-lucide="eye"></i></button>
-                  <button class="btn btn-sm btn-ghost" title="Edit" onclick="openComplaintEdit(${c.id})"><i data-lucide="pencil"></i></button>
-                  <button class="btn btn-sm btn-ghost text-danger" title="Delete" onclick="deleteComplaint(${c.id},'${esc(c.complaint_no)}')"><i data-lucide="trash-2"></i></button>
-                </div>
-              </td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>
+    <div class="card cmp-table-card">
+      <div class="table-wrapper">
+        <table class="cmp-table">
+          <thead><tr>
+            <th style="width:36px"><input type="checkbox" id="cmpSelectAll" title="Select all" /></th>
+            <th>Ref No</th><th>Customer</th><th>Complaint Types</th>
+            <th>Engineer</th><th>Status</th><th>Date</th><th style="width:100px">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${data.map(c => `
+              <tr class="cmp-row">
+                <td><input type="checkbox" class="cmp-chk" value="${c.id}" /></td>
+                <td>
+                  <span class="mono-tag row-link" onclick="openComplaintDetail(${c.id})">${esc(c.complaint_no)}</span>
+                </td>
+                <td>
+                  <div class="cmp-customer-name">${esc(c.new_party_name)}</div>
+                  <div class="td-muted" style="font-size:11.5px">SN: ${c.nsn}${c.area ? ' · ' + esc(c.area) : ''}</div>
+                </td>
+                <td class="cmp-type-cell">${typeChips(c.complaint_type)}</td>
+                <td class="td-muted">${esc(c.engineer_name||'—')}</td>
+                <td>${statusBadge(c.status)}</td>
+                <td class="td-muted cmp-date">${fmtDate(c.created_at)}</td>
+                <td>
+                  <div class="cmp-actions">
+                    <button class="cmp-act-btn" title="View" onclick="openComplaintDetail(${c.id})"><i data-lucide="eye"></i></button>
+                    <button class="cmp-act-btn" title="Edit" onclick="openComplaintEdit(${c.id})"><i data-lucide="pencil"></i></button>
+                    <button class="cmp-act-btn danger" title="Delete" onclick="deleteComplaint(${c.id},'${esc(c.complaint_no)}')"><i data-lucide="trash-2"></i></button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
     <div class="pagination">
       <span>Showing ${data.length} of ${total} complaints</span>
       <div class="pagination-btns">
