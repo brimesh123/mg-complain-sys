@@ -424,6 +424,7 @@ function newComplaint(el) {
             <i data-lucide="message-circle"></i> Combined Message
           </div>
           <div class="nc-success-msg-wrap" id="ncSuccessMsg"></div>
+          <div class="nc-wa-status-wrap" id="ncWaStatus" style="display:none"></div>
           <div class="nc-success-btns" id="ncSuccessBtns"></div>
         </div>
       </div>
@@ -434,7 +435,7 @@ function newComplaint(el) {
 
   document.getElementById('ncAddBtn').addEventListener('click', _ncAddToQueue);
   document.getElementById('ncRemarks').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); _ncAddToQueue(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _ncAddToQueue(); }
   });
   document.getElementById('ncSubmitBtn').addEventListener('click', _ncSubmitAll);
   _ncRefreshSubmitBtn();
@@ -610,12 +611,11 @@ function _ncBuildMsg(results) {
     day:'2-digit', month:'short', year:'numeric',
     hour:'2-digit', minute:'2-digit', hour12:true,
   });
-  const lines = [`*Complaints — ${timeStr}*`, ''];
+  const lines = [`Complaints — ${timeStr}`, ''];
   results.forEach((r, i) => {
-    lines.push(`*${i + 1}. NSN ${r.nsn} — ${r.new_party_name || ''}*`);
-    if (r.address) lines.push(`*Address:* ${r.address}`);
-    lines.push(`*Complaint:* ${r.remarks || '—'}`);
-    if (r.complaint_no && r.complaint_no !== '(pending)') lines.push(`*Ref:* ${r.complaint_no}`);
+    lines.push(`${i + 1}. SN ${r.nsn} — ${r.new_party_name || ''}`);
+    if (r.address) lines.push(`Address: ${r.address}`);
+    lines.push(`Complaint: ${r.remarks || '—'}`);
     if (i < results.length - 1) lines.push('');
   });
   return lines.join('\n');
@@ -664,10 +664,8 @@ function _ncShowSuccess(results) {
   // Build action buttons
   const btnsEl = document.getElementById('ncSuccessBtns');
   const waReady = WA.status === 'ready' && WA.target_id;
-  let sent = false;
 
   btnsEl.innerHTML = `
-    ${waReady ? `<button class="btn btn-success" id="ncSentBtn"><i data-lucide="send"></i> Send to WhatsApp</button>` : ''}
     <button class="btn btn-secondary" id="ncCopyFinalBtn"><i data-lucide="copy"></i> Copy Message</button>
     <button class="btn btn-primary" onclick="navigate('new-complaint')"><i data-lucide="plus"></i> Log More</button>
     <button class="btn btn-ghost" onclick="navigate('complaints')"><i data-lucide="list"></i> View All</button>`;
@@ -676,28 +674,24 @@ function _ncShowSuccess(results) {
   document.getElementById('ncCopyFinalBtn').onclick = () =>
     navigator.clipboard.writeText(msg).then(() => toast('Copied!', 'success'));
 
-  if (waReady) {
-    document.getElementById('ncSentBtn').onclick = async () => {
-      if (sent) return;
-      sent = true;
-      const b = document.getElementById('ncSentBtn');
-      b.disabled = true;
-      b.innerHTML = '<i data-lucide="loader"></i> Sending…';
-      lucide.createIcons({ nodes: [b] });
-      try {
-        await API.post('/api/whatsapp/send', { chat_id: WA.target_id, message: msg });
-        b.innerHTML = '<i data-lucide="check-circle"></i> Sent to ' + esc(WA.target_name || 'group') + '!';
-        lucide.createIcons({ nodes: [b] });
+  // WA status indicator (not a button — auto-sends silently)
+  const waStatus = document.getElementById('ncWaStatus');
+  if (waReady && waStatus) {
+    waStatus.style.display = '';
+    waStatus.innerHTML = `<span class="nc-wa-status sending"><i data-lucide="loader"></i> Sending to ${esc(WA.target_name || 'group')}…</span>`;
+    lucide.createIcons({ nodes: [waStatus] });
+    API.post('/api/whatsapp/send', { chat_id: WA.target_id, message: msg })
+      .then(() => {
+        waStatus.innerHTML = `<span class="nc-wa-status sent"><i data-lucide="check-circle"></i> Sent to ${esc(WA.target_name || 'group')}</span>`;
+        lucide.createIcons({ nodes: [waStatus] });
         toast('Sent to WhatsApp group!', 'success');
-      } catch(e) {
-        sent = false; b.disabled = false;
-        b.innerHTML = '<i data-lucide="send"></i> Send to WhatsApp';
-        lucide.createIcons({ nodes: [b] });
-        toast(e.message, 'danger');
-      }
-    };
-    // Auto-send
-    document.getElementById('ncSentBtn').click();
+      })
+      .catch(e => {
+        waStatus.innerHTML = `<span class="nc-wa-status error"><i data-lucide="alert-circle"></i> ${esc(e.message)}</span>`;
+        lucide.createIcons({ nodes: [waStatus] });
+      });
+  } else if (waStatus) {
+    waStatus.style.display = 'none';
   }
 
   lucide.createIcons({ nodes: [success] });
@@ -1976,12 +1970,12 @@ async function reportsPage(el) {
             <input class="form-control" id="rptTo" type="date"/>
           </div>
 
-          <!-- Generate -->
+          <!-- Actions -->
           <div style="display:flex;align-items:flex-end;gap:8px" class="rpt-filter-actions">
             <button class="btn btn-primary" id="rptSearchBtn" style="white-space:nowrap">
-              <i data-lucide="bar-chart-2"></i> Generate
+              <i data-lucide="refresh-cw"></i> Refresh
             </button>
-            <button class="btn btn-secondary" id="rptClearBtn" style="white-space:nowrap">
+            <button class="btn btn-ghost" id="rptClearBtn" style="white-space:nowrap">
               <i data-lucide="x"></i> Clear
             </button>
           </div>
@@ -2035,6 +2029,7 @@ async function reportsPage(el) {
         <span><b>${esc(c.new_party_name)}</b> · NSN: ${c.nsn}${c.area ? ' · '+esc(c.area) : ''}</span>
       </div>`;
     lucide.createIcons({ nodes: [custChip] });
+    debouncedLoad();
   };
 
   const rptClearCustomer = () => {
@@ -2076,9 +2071,7 @@ async function reportsPage(el) {
     rangeSelect.value = '';
     document.getElementById('rptFromWrap').style.display = 'none';
     document.getElementById('rptToWrap').style.display   = 'none';
-    document.getElementById('rptResults').innerHTML = '';
-    const exportBtn = document.getElementById('rptExportBtn');
-    exportBtn.style.opacity = '.4'; exportBtn.style.pointerEvents = 'none'; exportBtn.href = '#';
+    load();
   });
 
   // ── Generate ─────────────────────────────────────────────────────────────────
@@ -2108,8 +2101,22 @@ async function reportsPage(el) {
     }
   };
 
+  const debouncedLoad = debounce(load, 400);
+
   document.getElementById('rptSearchBtn').addEventListener('click', load);
   custInput.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+
+  // Auto-generate whenever any filter changes
+  document.getElementById('rptStatus').addEventListener('change', debouncedLoad);
+  document.getElementById('rptArea').addEventListener('change', debouncedLoad);
+  rangeSelect.addEventListener('change', () => {
+    if (rangeSelect.value !== 'custom') debouncedLoad();
+  });
+  document.getElementById('rptFrom').addEventListener('change', debouncedLoad);
+  document.getElementById('rptTo').addEventListener('change', debouncedLoad);
+
+  // Auto-load on open (show all complaints)
+  load();
 }
 
 function renderReportResults(wrap, data, customer) {
