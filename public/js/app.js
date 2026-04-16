@@ -345,12 +345,120 @@ async function dashboard(el) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // NEW COMPLAINT — Bulk Queue
 // ═══════════════════════════════════════════════════════════════════════════════
-let _ncQueue    = [];   // [{ customer, description }]
-let _ncCustomer = null;
+const COMPLAINT_TYPES = [
+  'Pressure','Over detection','Image problem','Light setting','Vacuum',
+  'Pixel set / Model','Bottle change','Dundi Marvi','Size setting','GT card',
+  'Open / Close','Dip out','Kuwait Nakhvi','Shifting','Focus levu','Cleaning',
+  'Liquid vadhare aave','Blure','Machine issue','bubble nathi udta','Formate',
+  'Camera hang','PC hang','New update','ASV update','Extra pc programme',
+  'programme install','ball valve kholvo','rod nakhvo','error problem',
+  'file problem','jump','hitter change','sensor change','leakage',
+];
+
+let _ncQueue      = [];   // [{ customer, types:[], description }]
+let _ncCustomer   = null;
+let _ncSelTypes   = [];   // currently selected types (before adding to queue)
+
+// ── Complaint type multi-select ───────────────────────────────────────────────
+function _nctRender() {
+  const chips = document.getElementById('nctChips');
+  const ph    = document.getElementById('nctPlaceholder');
+  const list  = document.getElementById('nctList');
+  if (!chips) return;
+
+  // Update chips display
+  const existing = chips.querySelectorAll('.nct-chip');
+  existing.forEach(c => c.remove());
+  if (_ncSelTypes.length) {
+    ph && (ph.style.display = 'none');
+    _ncSelTypes.forEach(t => {
+      const chip = document.createElement('span');
+      chip.className = 'nct-chip';
+      chip.innerHTML = `${esc(t)} <button class="nct-chip-x" data-t="${esc(t)}" tabindex="-1">×</button>`;
+      chip.querySelector('.nct-chip-x').onclick = (e) => {
+        e.stopPropagation();
+        _ncSelTypes = _ncSelTypes.filter(x => x !== t);
+        _nctRender();
+        _nctPopulateList();
+      };
+      chips.insertBefore(chip, ph || null);
+    });
+  } else {
+    ph && (ph.style.display = '');
+  }
+
+  // Update list checkboxes if open
+  if (list && list.childElementCount) _nctPopulateList();
+}
+
+function _nctPopulateList(filter) {
+  const list = document.getElementById('nctList');
+  if (!list) return;
+  const q = (filter ?? (document.getElementById('nctSearch')?.value || '')).toLowerCase();
+  const filtered = COMPLAINT_TYPES.filter(t => !q || t.toLowerCase().includes(q));
+  list.innerHTML = filtered.length
+    ? filtered.map(t => `
+        <div class="nct-item ${_ncSelTypes.includes(t) ? 'selected' : ''}" data-t="${esc(t)}">
+          <span class="nct-item-check">${_ncSelTypes.includes(t) ? '✓' : ''}</span>
+          ${esc(t)}
+        </div>`).join('')
+    : `<div class="nct-empty">No match</div>`;
+  list.querySelectorAll('.nct-item').forEach(item => {
+    item.onclick = () => {
+      const t = item.dataset.t;
+      if (_ncSelTypes.includes(t)) _ncSelTypes = _ncSelTypes.filter(x => x !== t);
+      else _ncSelTypes.push(t);
+      _nctRender();
+      _nctPopulateList();
+    };
+  });
+}
+
+function _nctOpen() {
+  const dd = document.getElementById('nctDropdown');
+  const arrow = document.getElementById('nctArrow');
+  if (!dd) return;
+  dd.style.display = '';
+  arrow && arrow.classList.add('open');
+  _nctPopulateList('');
+  setTimeout(() => document.getElementById('nctSearch')?.focus(), 30);
+}
+
+function _nctClose() {
+  const dd = document.getElementById('nctDropdown');
+  const arrow = document.getElementById('nctArrow');
+  if (!dd) return;
+  dd.style.display = 'none';
+  arrow && arrow.classList.remove('open');
+}
+
+function _nctInit() {
+  const ctrl = document.getElementById('nctControl');
+  const wrap = document.getElementById('nctWrap');
+  const search = document.getElementById('nctSearch');
+  if (!ctrl) return;
+
+  ctrl.addEventListener('click', () => {
+    const dd = document.getElementById('nctDropdown');
+    if (dd && dd.style.display === 'none') _nctOpen(); else _nctClose();
+  });
+  ctrl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _nctOpen(); }
+    if (e.key === 'Escape') _nctClose();
+  });
+  if (search) {
+    search.addEventListener('input', () => _nctPopulateList(search.value));
+    search.addEventListener('keydown', e => { if (e.key === 'Escape') _nctClose(); });
+  }
+  document.addEventListener('click', function onDocClick(e) {
+    if (wrap && !wrap.contains(e.target)) { _nctClose(); }
+  });
+}
 
 function newComplaint(el) {
   _ncQueue    = [];
   _ncCustomer = null;
+  _ncSelTypes = [];
 
   el.innerHTML = `
     <div class="page-header" style="margin-bottom:16px">
@@ -383,9 +491,28 @@ function newComplaint(el) {
         <div class="customer-card" id="customerCard"></div>
 
         <div class="nc-complaint-area" id="ncComplaintArea" style="display:none">
-          <div class="nc-section-head" style="margin-top:16px"><i data-lucide="message-square"></i> Complaint</div>
-          <textarea class="form-control nc-textarea" id="ncRemarks" rows="3"
-            placeholder="Describe the issue… (Ctrl+Enter to add)"></textarea>
+          <div class="nc-section-head"><i data-lucide="tag"></i> Complaint Type <span class="nc-req-badge">required</span></div>
+
+          <!-- Multi-select types dropdown -->
+          <div class="nct-wrap" id="nctWrap">
+            <div class="nct-control" id="nctControl" tabindex="0">
+              <div class="nct-chips" id="nctChips">
+                <span class="nct-placeholder" id="nctPlaceholder">Search type… (select one or more)</span>
+              </div>
+              <i data-lucide="chevron-down" class="nct-arrow" id="nctArrow"></i>
+            </div>
+            <div class="nct-dropdown" id="nctDropdown" style="display:none">
+              <div class="nct-search-wrap">
+                <i data-lucide="search" class="nct-search-icon"></i>
+                <input class="nct-search" id="nctSearch" type="text" placeholder="Search complaint types…" autocomplete="off"/>
+              </div>
+              <div class="nct-list" id="nctList"></div>
+            </div>
+          </div>
+
+          <div class="nc-section-head" style="margin-top:14px"><i data-lucide="message-square"></i> Additional Notes <span class="nc-opt-badge">optional</span></div>
+          <textarea class="form-control nc-textarea" id="ncRemarks" rows="2"
+            placeholder="Extra details… (Enter to add, Shift+Enter for newline)"></textarea>
           <button class="btn btn-primary nc-add-btn" id="ncAddBtn">
             <i data-lucide="plus-circle"></i> Add to Queue
           </button>
@@ -432,6 +559,7 @@ function newComplaint(el) {
 
   lucide.createIcons({ nodes: [el] });
   initLookup();
+  _nctInit();
 
   document.getElementById('ncAddBtn').addEventListener('click', _ncAddToQueue);
   document.getElementById('ncRemarks').addEventListener('keydown', e => {
@@ -515,15 +643,22 @@ function selectCustomer(c) {
   lucide.createIcons({ nodes: [card] });
 
   const area = document.getElementById('ncComplaintArea');
-  if (area) { area.style.display = ''; setTimeout(() => document.getElementById('ncRemarks')?.focus(), 50); }
+  if (area) {
+    area.style.display = '';
+    _ncSelTypes = [];
+    _nctRender();
+    setTimeout(() => _nctOpen(), 80);
+  }
 }
 
 window.clearSelection = () => {
   _ncCustomer = null;
+  _ncSelTypes = [];
   const card = document.getElementById('customerCard');
   if (card) card.classList.remove('visible');
   const area = document.getElementById('ncComplaintArea');
   if (area) area.style.display = 'none';
+  _nctClose();
   const input = document.getElementById('lookupInput');
   if (input) { input.value = ''; input.focus(); }
 };
@@ -545,14 +680,20 @@ function _ncRefreshSubmitBtn() {
 
 function _ncAddToQueue() {
   if (!_ncCustomer) { toast('Select a customer first', 'warning'); return; }
+  if (!_ncSelTypes.length) {
+    toast('Select at least one complaint type', 'warning');
+    _nctOpen();
+    return;
+  }
   const remarks = (document.getElementById('ncRemarks')?.value || '').trim();
-  if (!remarks) { toast('Please describe the complaint', 'warning'); document.getElementById('ncRemarks')?.focus(); return; }
 
-  _ncQueue.push({ customer: { ..._ncCustomer }, description: remarks });
+  _ncQueue.push({ customer: { ..._ncCustomer }, types: [..._ncSelTypes], description: remarks });
   _ncRenderQueue();
 
   // Clear for next entry
   document.getElementById('ncRemarks').value = '';
+  _ncSelTypes = [];
+  _nctClose();
   clearSelection();
   toast(`Added (${_ncQueue.length} in queue)`, 'success');
 }
@@ -584,8 +725,9 @@ function _ncRenderQueue() {
       <div class="nc-qi-num">${i + 1}</div>
       <div class="nc-qi-body">
         <div class="nc-qi-name">${esc(item.customer.new_party_name || item.customer.party_name)}</div>
-        <div class="nc-qi-meta">NSN: <b>${item.customer.nsn}</b>${item.customer.area ? ' · ' + esc(item.customer.area) : ''}</div>
-        <div class="nc-qi-desc">${esc(item.description)}</div>
+        <div class="nc-qi-meta">SN: <b>${item.customer.nsn}</b>${item.customer.area ? ' · ' + esc(item.customer.area) : ''}</div>
+        <div class="nc-qi-types">${(item.types||[]).map(t => `<span class="nc-qi-type-chip">${esc(t)}</span>`).join('')}</div>
+        ${item.description ? `<div class="nc-qi-desc">${esc(item.description)}</div>` : ''}
       </div>
       <button class="nc-qi-remove" onclick="_ncRemove(${i})" title="Remove"><i data-lucide="x"></i></button>
     </div>`).join('');
@@ -600,7 +742,7 @@ window._ncRemove = (idx) => { _ncQueue.splice(idx, 1); _ncRenderQueue(); };
 function _ncCopyAll() {
   const msg = _ncBuildMsg(_ncQueue.map(q => ({
     nsn: q.customer.nsn, new_party_name: q.customer.new_party_name,
-    address: q.customer.address, remarks: q.description, complaint_no: '(pending)',
+    address: q.customer.address, types: q.types, remarks: q.description,
   })));
   navigator.clipboard.writeText(msg).then(() => toast('Copied!', 'success'));
 }
@@ -615,7 +757,8 @@ function _ncBuildMsg(results) {
   results.forEach((r, i) => {
     lines.push(`${i + 1}. SN ${r.nsn} — ${r.new_party_name || ''}`);
     if (r.address) lines.push(`Address: ${r.address}`);
-    lines.push(`Complaint: ${r.remarks || '—'}`);
+    if (r.types && r.types.length) lines.push(`Type: ${r.types.join(', ')}`);
+    if (r.remarks) lines.push(`Note: ${r.remarks}`);
     if (i < results.length - 1) lines.push('');
   });
   return lines.join('\n');
@@ -629,10 +772,19 @@ async function _ncSubmitAll() {
   lucide.createIcons({ nodes: [btn] });
 
   try {
+    const queueSnapshot = _ncQueue.map(q => ({ types: q.types, description: q.description }));
     const { data: results } = await API.post('/api/complaints/bulk', {
-      complaints: _ncQueue.map(q => ({ customer_id: q.customer.id, remarks: q.description })),
+      complaints: _ncQueue.map(q => ({
+        customer_id: q.customer.id,
+        complaint_type: (q.types||[]).join(', ') || 'General',
+        remarks: [q.types&&q.types.length ? q.types.join(', ') : null, q.description||null].filter(Boolean).join(' — ') || null,
+      })),
     });
     await preload();
+    // Merge types/description back into results for WA message
+    results.forEach((r, i) => {
+      if (queueSnapshot[i]) { r.types = queueSnapshot[i].types; r.remarks = queueSnapshot[i].description; }
+    });
     _ncShowSuccess(results);
   } catch(err) {
     toast(err.message, 'danger');
