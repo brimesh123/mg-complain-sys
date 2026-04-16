@@ -360,99 +360,170 @@ let _ncCustomer   = null;
 let _ncSelTypes   = [];   // currently selected types (before adding to queue)
 
 // ── Complaint type multi-select ───────────────────────────────────────────────
-function _nctRender() {
+// State: _ncSelTypes (array of selected type strings)
+// Strategy: use `mousedown` for all interactions so event order is deterministic.
+// The document's outside-click handler uses mousedown and is properly torn down
+// on each _nctInit() call to prevent stale listeners from prior page visits.
+
+let _nctIsOpen = false;
+let _nctOutsideHandler = null;   // stored so we can remove it on re-init
+
+function _nctRenderChips() {
   const chips = document.getElementById('nctChips');
   const ph    = document.getElementById('nctPlaceholder');
-  const list  = document.getElementById('nctList');
   if (!chips) return;
-
-  // Update chips display
-  const existing = chips.querySelectorAll('.nct-chip');
-  existing.forEach(c => c.remove());
+  chips.querySelectorAll('.nct-chip').forEach(c => c.remove());
   if (_ncSelTypes.length) {
     ph && (ph.style.display = 'none');
     _ncSelTypes.forEach(t => {
       const chip = document.createElement('span');
       chip.className = 'nct-chip';
-      chip.innerHTML = `${esc(t)} <button class="nct-chip-x" data-t="${esc(t)}" tabindex="-1">×</button>`;
-      chip.querySelector('.nct-chip-x').onclick = (e) => {
-        e.stopPropagation();
+      chip.innerHTML = `${esc(t)}<button class="nct-chip-x" aria-label="Remove ${esc(t)}">×</button>`;
+      chip.querySelector('.nct-chip-x').addEventListener('mousedown', (e) => {
+        e.preventDefault();         // keep dropdown open / prevent blur
+        e.stopPropagation();        // don't bubble to .nct-control toggle handler
         _ncSelTypes = _ncSelTypes.filter(x => x !== t);
-        _nctRender();
-        _nctPopulateList();
-      };
-      chips.insertBefore(chip, ph || null);
+        _nctRenderChips();
+        _nctPopulateList();         // refresh checkmarks in open list
+      });
+      chips.insertBefore(chip, ph);
     });
   } else {
     ph && (ph.style.display = '');
   }
-
-  // Update list checkboxes if open
-  if (list && list.childElementCount) _nctPopulateList();
 }
 
-function _nctPopulateList(filter) {
-  const list = document.getElementById('nctList');
+function _nctPopulateList() {
+  const list   = document.getElementById('nctList');
+  const search = document.getElementById('nctSearch');
   if (!list) return;
-  const q = (filter ?? (document.getElementById('nctSearch')?.value || '')).toLowerCase();
+  const q = (search?.value || '').toLowerCase().trim();
   const filtered = COMPLAINT_TYPES.filter(t => !q || t.toLowerCase().includes(q));
+
   list.innerHTML = filtered.length
     ? filtered.map(t => `
-        <div class="nct-item ${_ncSelTypes.includes(t) ? 'selected' : ''}" data-t="${esc(t)}">
+        <div class="nct-item${_ncSelTypes.includes(t) ? ' selected' : ''}"
+             data-t="${esc(t)}" tabindex="0" role="option"
+             aria-selected="${_ncSelTypes.includes(t)}">
           <span class="nct-item-check">${_ncSelTypes.includes(t) ? '✓' : ''}</span>
           ${esc(t)}
         </div>`).join('')
-    : `<div class="nct-empty">No match</div>`;
-  list.querySelectorAll('.nct-item').forEach(item => {
-    item.onclick = () => {
+    : `<div class="nct-empty">No match for "<b>${esc(q)}</b>"</div>`;
+
+  list.querySelectorAll('.nct-item[data-t]').forEach(item => {
+    // mousedown: fires before blur, lets us toggle without closing
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();   // keep search input focused
       const t = item.dataset.t;
       if (_ncSelTypes.includes(t)) _ncSelTypes = _ncSelTypes.filter(x => x !== t);
       else _ncSelTypes.push(t);
-      _nctRender();
+      _nctRenderChips();
       _nctPopulateList();
-    };
+      document.getElementById('nctSearch')?.focus();
+    });
+    // Keyboard: Enter/Space to toggle, arrows to navigate
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const t = item.dataset.t;
+        if (_ncSelTypes.includes(t)) _ncSelTypes = _ncSelTypes.filter(x => x !== t);
+        else _ncSelTypes.push(t);
+        _nctRenderChips();
+        _nctPopulateList();
+      }
+      if (e.key === 'ArrowDown') { e.preventDefault(); (item.nextElementSibling)?.focus(); }
+      if (e.key === 'ArrowUp')   {
+        e.preventDefault();
+        if (item.previousElementSibling) item.previousElementSibling.focus();
+        else document.getElementById('nctSearch')?.focus();
+      }
+      if (e.key === 'Escape') { _nctClose(); document.getElementById('nctControl')?.focus(); }
+    });
   });
 }
 
 function _nctOpen() {
-  const dd = document.getElementById('nctDropdown');
+  const dd    = document.getElementById('nctDropdown');
   const arrow = document.getElementById('nctArrow');
-  if (!dd) return;
+  if (!dd || _nctIsOpen) return;
+  _nctIsOpen = true;
   dd.style.display = '';
-  arrow && arrow.classList.add('open');
-  _nctPopulateList('');
-  setTimeout(() => document.getElementById('nctSearch')?.focus(), 30);
+  arrow?.classList.add('open');
+  const search = document.getElementById('nctSearch');
+  if (search) { search.value = ''; }
+  _nctPopulateList();
+  setTimeout(() => document.getElementById('nctSearch')?.focus(), 20);
 }
 
 function _nctClose() {
-  const dd = document.getElementById('nctDropdown');
+  const dd    = document.getElementById('nctDropdown');
   const arrow = document.getElementById('nctArrow');
-  if (!dd) return;
+  if (!dd || !_nctIsOpen) return;
+  _nctIsOpen = false;
   dd.style.display = 'none';
-  arrow && arrow.classList.remove('open');
+  arrow?.classList.remove('open');
 }
 
 function _nctInit() {
-  const ctrl = document.getElementById('nctControl');
-  const wrap = document.getElementById('nctWrap');
+  const ctrl  = document.getElementById('nctControl');
+  const wrap  = document.getElementById('nctWrap');
+  const dd    = document.getElementById('nctDropdown');
   const search = document.getElementById('nctSearch');
   if (!ctrl) return;
 
-  ctrl.addEventListener('click', () => {
-    const dd = document.getElementById('nctDropdown');
-    if (dd && dd.style.display === 'none') _nctOpen(); else _nctClose();
+  // Remove any stale outside-click handler from a prior page visit
+  if (_nctOutsideHandler) {
+    document.removeEventListener('mousedown', _nctOutsideHandler);
+    _nctOutsideHandler = null;
+  }
+  _nctIsOpen = false;
+
+  // Control: toggle on mousedown so it fires BEFORE blur
+  ctrl.addEventListener('mousedown', (e) => {
+    // If clicking a chip's X button, let the chip handler deal with it
+    if (e.target.closest('.nct-chip-x')) return;
+    e.preventDefault();   // prevent focus from leaving the search input when open
+    if (_nctIsOpen) _nctClose(); else _nctOpen();
   });
-  ctrl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _nctOpen(); }
+
+  // Keyboard on control
+  ctrl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _nctIsOpen ? _nctClose() : _nctOpen(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); _nctOpen(); }
     if (e.key === 'Escape') _nctClose();
   });
+
+  // Keyboard + input on search
   if (search) {
-    search.addEventListener('input', () => _nctPopulateList(search.value));
-    search.addEventListener('keydown', e => { if (e.key === 'Escape') _nctClose(); });
+    search.addEventListener('input', _nctPopulateList);
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { _nctClose(); ctrl.focus(); }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        document.querySelector('#nctList .nct-item')?.focus();
+      }
+      if (e.key === 'Enter') {
+        // Select first visible item on Enter in search box
+        const first = document.querySelector('#nctList .nct-item[data-t]');
+        if (first) {
+          const t = first.dataset.t;
+          if (_ncSelTypes.includes(t)) _ncSelTypes = _ncSelTypes.filter(x => x !== t);
+          else _ncSelTypes.push(t);
+          _nctRenderChips();
+          _nctPopulateList();
+        }
+      }
+    });
   }
-  document.addEventListener('click', function onDocClick(e) {
-    if (wrap && !wrap.contains(e.target)) { _nctClose(); }
-  });
+
+  // Stop dropdown's own mousedown from reaching the outside-click handler
+  dd?.addEventListener('mousedown', (e) => e.stopPropagation());
+
+  // Outside-click: close when mousedown fires outside the entire wrap
+  _nctOutsideHandler = (e) => {
+    if (wrap && wrap.isConnected && !wrap.contains(e.target)) _nctClose();
+  };
+  document.addEventListener('mousedown', _nctOutsideHandler);
 }
 
 function newComplaint(el) {
@@ -646,7 +717,7 @@ function selectCustomer(c) {
   if (area) {
     area.style.display = '';
     _ncSelTypes = [];
-    _nctRender();
+    _nctRenderChips();
     setTimeout(() => _nctOpen(), 80);
   }
 }

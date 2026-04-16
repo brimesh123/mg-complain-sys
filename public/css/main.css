@@ -1431,9 +1431,14 @@ textarea.form-control { resize: vertical; min-height: 80px; }
   cursor: pointer;
   transition: background var(--transition);
   color: var(--text);
+  outline: none;
+  user-select: none;
 }
-.nct-item:hover { background: var(--surface-2); }
+.nct-item:hover,
+.nct-item:focus { background: var(--surface-2); }
 .nct-item.selected { background: var(--primary-light); color: var(--primary); font-weight: 600; }
+.nct-item.selected:hover,
+.nct-item.selected:focus { background: #dbeafe; }
 .nct-item-check {
   width: 16px;
   font-size: 13px;
