@@ -279,19 +279,15 @@ async function dashboard(el) {
   try {
     const { data } = await API.get('/api/dashboard/stats');
     const { stats, recent } = data;
-    const now = new Date();
-    const greet = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
-    const todayStr = now.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
 
     el.innerHTML = `
-      <div class="db-hero">
-        <div class="db-hero-text">
-          <div class="db-greet">${greet} 👋</div>
-          <div class="db-date">${todayStr}</div>
-          <div class="db-sub">Complaint management overview</div>
+      <div class="page-header">
+        <div>
+          <div class="page-header-title">Dashboard</div>
+          <div class="page-header-sub">Overview of your complaint management system</div>
         </div>
-        <button class="btn btn-primary db-hero-btn" onclick="navigate('new-complaint')">
-          <i data-lucide="plus"></i> Log Complaint
+        <button class="btn btn-primary" onclick="navigate('new-complaint')">
+          <i data-lucide="plus"></i> New Complaint
         </button>
       </div>
 
